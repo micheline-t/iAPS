@@ -4,7 +4,7 @@ import Swinject
 extension Calibrations {
     struct RootView: BaseView {
         let resolver: Resolver
-        @StateObject var state = StateModel()
+        @StateObject var state: StateModel
 
         private var formatter: NumberFormatter {
             let formatter = NumberFormatter()
@@ -20,6 +20,11 @@ extension Calibrations {
             return formatter
         }
 
+        init(resolver: Resolver) {
+            self.resolver = resolver
+            _state = StateObject(wrappedValue: StateModel(resolver: resolver))
+        }
+
         var body: some View {
             GeometryReader { geo in
                 Form {
@@ -32,7 +37,7 @@ extension Calibrations {
                                 value: $state.newCalibration,
                                 formatter: formatter,
                                 autofocus: false,
-                                cleanInput: true
+                                liveEditing: true
                             )
                             Text(state.units.rawValue).foregroundColor(.secondary)
                         }
@@ -96,7 +101,6 @@ extension Calibrations {
                 }
             }
             .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-            .onAppear(perform: configureView)
             .navigationTitle("Calibrations")
             .navigationBarItems(trailing: EditButton().disabled(state.calibrations.isEmpty))
             .navigationBarTitleDisplayMode(.automatic)

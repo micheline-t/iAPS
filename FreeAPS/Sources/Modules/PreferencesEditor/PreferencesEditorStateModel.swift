@@ -9,11 +9,13 @@ extension PreferencesEditor {
         @Published var sections: [FieldSection] = []
         @Published var useAlternativeBolusCalc: Bool = false
         @Published var units: GlucoseUnits = .mmolL
+        @Published var maxCarbs: Decimal = 200
 
         override func subscribe() {
             preferences = provider.preferences
             units = settingsManager.settings.units
 
+            subscribeSetting(\.maxCarbs, on: $maxCarbs) { maxCarbs = $0 }
             subscribeSetting(\.units, on: $unitsIndex.map { $0 == 0 ? GlucoseUnits.mgdL : .mmolL }) {
                 unitsIndex = $0 == .mgdL ? 0 : 1
             } didSet: { [weak self] _ in
@@ -56,9 +58,17 @@ extension PreferencesEditor {
                     ),
                     settable: self
                 ),
-
                 Field(
-                    displayName: NSLocalizedString("Autosens Max", comment: "Autosens Max"),
+                    displayName: NSLocalizedString("Threshold Setting", comment: ""),
+                    type: .glucose(keypath: \.threshold_setting),
+                    infoText: NSLocalizedString(
+                        "This setting lets you choose a glucose target limit below which no SMB insulin or extra temporary basal insulin will ever be given. Extra temporary basal insulin is the insulin exceeding the insulin required for the basal metabolism.\n\nThe actual glucose threshold used in OpenAPS algoritm will always be the bigger amount of this setting and the computed value:\n\nTarget Glucose - (Target Glucose - 40) / 2.",
+                        comment: ""
+                    ),
+                    settable: self
+                ),
+                Field(
+                    displayName: NSLocalizedString("Autosens Maximum", comment: "Autosens Max"),
                     type: .decimal(keypath: \.autosensMax),
                     infoText: NSLocalizedString(
                         "This is a multiplier cap for autosens (and autotune) to set a 20% max limit on how high the autosens ratio can be, which in turn determines how high autosens can adjust basals, how low it can adjust ISF, and how low it can set the BG target.",
@@ -67,7 +77,7 @@ extension PreferencesEditor {
                     settable: self
                 ),
                 Field(
-                    displayName: NSLocalizedString("Autosens Min", comment: "Autosens Min"),
+                    displayName: NSLocalizedString("Autosens Minimum", comment: "Autosens Min"),
                     type: .decimal(keypath: \.autosensMin),
                     infoText: NSLocalizedString(
                         "The other side of the autosens safety limits, putting a cap on how low autosens can adjust basals, and how high it can adjust ISF and BG targets.",
@@ -146,13 +156,13 @@ extension PreferencesEditor {
                 ),
                 Field(
                     displayName: NSLocalizedString(
-                        "... When Blood Glucose Is Over (mg/dl):",
-                        comment: "... When Blood Glucose Is Over (mg/dl):"
+                        "... When Blood Glucose Is Above:",
+                        comment: "... When Blood Glucose Is Above:"
                     ),
-                    type: .decimal(keypath: \.enableSMB_high_bg_target),
+                    type: .glucose(keypath: \.enableSMB_high_bg_target),
                     infoText: NSLocalizedString(
                         "Set the value enableSMB_high_bg will compare against to enable SMB. If BG > than this value, SMBs should enable.",
-                        comment: "... When Blood Glucose Is Over (mg/dl):"
+                        comment: "... When Blood Glucose Is Above:"
                     ),
                     settable: self
                 ),
@@ -259,7 +269,7 @@ extension PreferencesEditor {
                 ),
                 Field(
                     displayName: NSLocalizedString("Half Basal Exercise Target", comment: "Half Basal Exercise Target"),
-                    type: .decimal(keypath: \.halfBasalExerciseTarget),
+                    type: .glucose(keypath: \.halfBasalExerciseTarget),
                     infoText: NSLocalizedString(
                         "Set to a number, e.g. 160, which means when temp target is 160 mg/dL, run 50% basal at this level (120 = 75%; 140 = 60%). This can be adjusted, to give you more control over your exercise modes.",
                         comment: "Half Basal Exercise Target"
@@ -358,7 +368,7 @@ extension PreferencesEditor {
                     displayName: NSLocalizedString("Remaining Carbs Cap", comment: "Remaining Carbs Cap"),
                     type: .decimal(keypath: \.remainingCarbsCap),
                     infoText: NSLocalizedString(
-                        "This is the amount of the maximum number of carbs we’ll assume will absorb over 4h if we don’t yet see carb absorption.",
+                        "This is the amount of the maximum number of carbs we’ll assume will absorb over 4h if we don’t yet see carb absorption. Maximum 90",
                         comment: "Remaining Carbs Cap"
                     ),
                     settable: self

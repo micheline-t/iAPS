@@ -19,6 +19,7 @@ struct DynamicVariables: JSON, Codable {
     var isfAndCr: Bool
     var isf: Bool
     var cr: Bool
+    var basal: Bool
     var smbIsAlwaysOff: Bool
     var start: Decimal
     var end: Decimal
@@ -26,7 +27,9 @@ struct DynamicVariables: JSON, Codable {
     var uamMinutes: Decimal
     var maxIOB: Decimal
     var overrideMaxIOB: Bool
-    var disableCGMError: Bool
+    var preset: String
+    var autoISFoverrides: AutoISFsettings
+    var aisfOverridden: Bool
 
     init(
         average_total_data: Decimal,
@@ -47,6 +50,7 @@ struct DynamicVariables: JSON, Codable {
         isfAndCr: Bool,
         isf: Bool,
         cr: Bool,
+        basal: Bool,
         smbIsAlwaysOff: Bool,
         start: Decimal,
         end: Decimal,
@@ -54,7 +58,9 @@ struct DynamicVariables: JSON, Codable {
         uamMinutes: Decimal,
         maxIOB: Decimal,
         overrideMaxIOB: Bool,
-        disableCGMError: Bool
+        preset: String,
+        autoISFoverrides: AutoISFsettings,
+        aisfOverridden: Bool
     ) {
         self.average_total_data = average_total_data
         self.weightedAverage = weightedAverage
@@ -74,6 +80,7 @@ struct DynamicVariables: JSON, Codable {
         self.isfAndCr = isfAndCr
         self.isf = isf
         self.cr = cr
+        self.basal = basal
         self.smbIsAlwaysOff = smbIsAlwaysOff
         self.start = start
         self.end = end
@@ -81,7 +88,9 @@ struct DynamicVariables: JSON, Codable {
         self.uamMinutes = uamMinutes
         self.maxIOB = maxIOB
         self.overrideMaxIOB = overrideMaxIOB
-        self.disableCGMError = disableCGMError
+        self.preset = preset
+        self.autoISFoverrides = autoISFoverrides
+        self.aisfOverridden = aisfOverridden
     }
 }
 
@@ -105,6 +114,7 @@ extension DynamicVariables {
         case isfAndCr
         case isf
         case cr
+        case basal
         case smbIsAlwaysOff
         case start
         case end
@@ -112,7 +122,9 @@ extension DynamicVariables {
         case uamMinutes
         case maxIOB
         case overrideMaxIOB
-        case disableCGMError
+        case preset
+        case autoISFoverrides
+        case aisfOverridden
     }
 }
 

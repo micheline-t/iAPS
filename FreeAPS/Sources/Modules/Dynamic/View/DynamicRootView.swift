@@ -4,7 +4,7 @@ import Swinject
 extension Dynamic {
     struct RootView: BaseView {
         let resolver: Resolver
-        @StateObject var state = StateModel()
+        @StateObject var state: StateModel
 
         @State var isPresented = false
         @State var description = Text("")
@@ -39,9 +39,26 @@ extension Dynamic {
             return formatter
         }
 
+        private var daysFormatter: NumberFormatter {
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .decimal
+            formatter.maximumFractionDigits = 1
+            return formatter
+        }
+
+        init(resolver: Resolver) {
+            self.resolver = resolver
+            _state = StateObject(wrappedValue: StateModel(resolver: resolver))
+        }
+
         var body: some View {
             Form {
                 Section {
+                    if state.aisf {
+                        Text("Dynamic ISF is disabled while Auto ISF is enabled")
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .foregroundStyle(.red)
+                    }
                     HStack {
                         Toggle(isOn: $state.useNewFormula) {
                             Text("Activate Dynamic Sensitivity (ISF)")
@@ -55,7 +72,7 @@ extension Dynamic {
                         }.disabled(isPresented)
                     }
 
-                    if state.useNewFormula {
+                    if state.useNewFormula, !state.aisf {
                         HStack {
                             Toggle(isOn: $state.enableDynamicCR) {
                                 Text("Activate Dynamic Carb Ratio (CR)")
@@ -70,9 +87,9 @@ extension Dynamic {
                             }.disabled(isPresented)
                         }
                     }
-                } header: { Text("Enable") }
+                } header: { state.aisf ? nil : Text("Experimental").foregroundStyle(.red) }
 
-                if state.useNewFormula {
+                if state.useNewFormula, !state.aisf {
                     Section {
                         HStack {
                             Toggle(isOn: $state.sigmoid) {
@@ -118,56 +135,57 @@ extension Dynamic {
                                 .disabled(isPresented)
                         }
 
-                        HStack {
-                            Toggle(isOn: $state.tddAdjBasal) {
-                                Text("Adjust basal")
-                                    .onTapGesture {
-                                        info(
-                                            header: "Adjust basal",
-                                            body: "Enable adjustment of basal based on the ratio of current TDD / 7 day average TDD",
-                                            useGraphics: nil
-                                        )
-                                    }
-                            }.disabled(isPresented)
-                        }
-
                     } header: { Text("Settings") }
                 }
 
-                Section {
-                    HStack {
-                        Text("Threshold Setting")
-                            .onTapGesture {
-                                scrollView = true
-                                graphics = thresholdTable().asAny()
-                                let unitString = state.unit.rawValue
-                                info(
-                                    header: "Minimum Threshold Setting",
-                                    body: NSLocalizedString(
-                                        "This setting lets you choose a level below which no insulin will be given.\n\nThe threshold is using the largest amount of your threshold setting and the computed threshold:\n\nTarget Glucose - (Target Glucose - 40) / 2\n, here using mg/dl as glucose unit.\n\nFor example, if your Target Glucose is ",
-                                        comment: "Threshold string part 1"
-                                    ) + "\(glucoseString(100)) \(unitString) , " +
-                                        NSLocalizedString("the threshold will be ", comment: "Threshold string part 2") +
-                                        " \(glucoseString(70)) \(unitString), " + NSLocalizedString(
-                                            "unless your threshold setting is set higher:",
-                                            comment: "Threshold string part 3"
-                                        ),
-                                    useGraphics: graphics
-                                )
-                            }
-                        Spacer()
-                        DecimalTextField("0", value: $state.threshold_setting, formatter: glucoseFormatter)
-                            .disabled(isPresented)
-                        Text(state.unit.rawValue)
+                if let averages = state.averages {
+                    Section {
+                        HStack {
+                            Text("Average ISF")
+                            Spacer()
+                            Text(
+                                glucoseFormatter
+                                    .string(from: averages.isf as NSNumber) ?? ""
+                            )
+                            Text(state.unit.rawValue + NSLocalizedString("/U", comment: "")).foregroundColor(.secondary)
+                        }
+
+                        HStack {
+                            Text("Average CR")
+                            Spacer()
+                            Text(
+                                daysFormatter
+                                    .string(from: averages.cr as NSNumber) ?? ""
+                            )
+                            Text("g/U").foregroundColor(.secondary)
+                        }
+
+                        HStack {
+                            Text("Average CSF")
+                            Spacer()
+                            Text(
+                                glucoseFormatter
+                                    .string(from: (Double(averages.isf) / Double(averages.cr)) as NSNumber) ?? ""
+                            )
+                            Text(state.unit.rawValue + "/g").foregroundColor(.secondary)
+                        }
+                    } header: {
+                        HStack(spacing: 0) {
+                            Text("Averages")
+                            Text(
+                                " (" + (daysFormatter.string(from: averages.days as NSNumber) ?? "") + " " +
+                                    NSLocalizedString("days", comment: " days of data") + ")"
+                            )
+                        }
                     }
-                } header: { Text("Safety") }
+                    footer: { Text("ISF: Insulin Sensitivity, CR: Carb Ratio,\nCSF: Carb Sensitivity = ISF/CR") }
+                }
             }
             .blur(radius: isPresented ? 5 : 0)
             .description(isPresented: isPresented, alignment: .center) {
                 if scrollView { infoScrollView() } else { infoView() }
             }
             .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-            .onAppear(perform: configureView)
             .navigationBarTitle("Dynamic ISF")
             .navigationBarTitleDisplayMode(.automatic)
             .onDisappear {
@@ -245,7 +263,7 @@ extension Dynamic {
                 }
             }
             .padding(.all, 20)
-            .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
+            .foregroundStyle(colorScheme == .dark ? IAPSconfig.previewBackgroundLight : IAPSconfig.previewBackgroundDark)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(colorScheme == .dark ? Color(.black) : Color(.white))

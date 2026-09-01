@@ -1,3 +1,4 @@
+import Charts
 import CoreData
 import SpriteKit
 import SwiftDate
@@ -8,17 +9,27 @@ extension Home {
     struct RootView: BaseView {
         let resolver: Resolver
 
-        @StateObject var state = StateModel()
+        @StateObject var state: StateModel
         @State var isStatusPopupPresented = false
         @State var showCancelAlert = false
         @State var showCancelTTAlert = false
+        @State var showExpirationAlert = false
         @State var triggerUpdate = false
+        @State var display = false
+        @State var displayGlucose = false
+        @State var animateLoop = Date.distantPast
+        @State var animateTIR = Date.distantPast
+        @State var showBolusActiveAlert = false
+        @State var displayAutoHistory = false
+        @State var displayDynamicHistory = false
+        @State var displayAllNutrients = false
 
         let buttonFont = Font.custom("TimeButtonFont", size: 14)
+        let viewPadding: CGFloat = 5
 
         @Environment(\.managedObjectContext) var moc
-        @Environment(\.colorScheme) var colorScheme
         @Environment(\.sizeCategory) private var fontSize
+        @Environment(\.colorScheme) var colorScheme
 
         @FetchRequest(
             entity: Override.entity(),
@@ -33,6 +44,11 @@ extension Home {
         ) var fetchedProfiles: FetchedResults<OverridePresets>
 
         @FetchRequest(
+            entity: Auto_ISF.entity(),
+            sortDescriptors: [NSSortDescriptor(key: "date", ascending: false)]
+        ) var fetchedAISF: FetchedResults<Auto_ISF>
+
+        @FetchRequest(
             entity: TempTargets.entity(),
             sortDescriptors: [NSSortDescriptor(key: "date", ascending: false)]
         ) var sliderTTpresets: FetchedResults<TempTargets>
@@ -42,41 +58,55 @@ extension Home {
             sortDescriptors: [NSSortDescriptor(key: "date", ascending: false)]
         ) var enactedSliderTT: FetchedResults<TempTargetsSlider>
 
-        private var numberFormatter: NumberFormatter {
+        @FetchRequest(
+            entity: Onboarding.entity(),
+            sortDescriptors: [NSSortDescriptor(key: "date", ascending: false)]
+        ) var onboarded: FetchedResults<Onboarding>
+
+        private let numberFormatter: NumberFormatter = {
             let formatter = NumberFormatter()
             formatter.numberStyle = .decimal
             formatter.maximumFractionDigits = 2
             return formatter
-        }
+        }()
 
-        private var fetchedTargetFormatter: NumberFormatter {
-            let formatter = NumberFormatter()
-            formatter.numberStyle = .decimal
-            if state.units == .mmolL {
-                formatter.maximumFractionDigits = 1
-            } else { formatter.maximumFractionDigits = 0 }
-            return formatter
-        }
-
-        private var targetFormatter: NumberFormatter {
+        private let fetchedTargetFormatterMmol: NumberFormatter = {
             let formatter = NumberFormatter()
             formatter.numberStyle = .decimal
             formatter.maximumFractionDigits = 1
             return formatter
-        }
+        }()
 
-        private var tirFormatter: NumberFormatter {
+        private let fetchedTargetFormatterMgdl: NumberFormatter = {
             let formatter = NumberFormatter()
             formatter.numberStyle = .decimal
             formatter.maximumFractionDigits = 0
             return formatter
+        }()
+
+        private var fetchedTargetFormatter: NumberFormatter {
+            state.data.units == .mmolL ? fetchedTargetFormatterMmol : fetchedTargetFormatterMgdl
         }
 
-        private var dateFormatter: DateFormatter {
+        private let targetFormatter: NumberFormatter = {
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .decimal
+            formatter.maximumFractionDigits = 1
+            return formatter
+        }()
+
+        private let tirFormatter: NumberFormatter = {
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .decimal
+            formatter.maximumFractionDigits = 0
+            return formatter
+        }()
+
+        private let dateFormatter: DateFormatter = {
             let dateFormatter = DateFormatter()
             dateFormatter.timeStyle = .short
             return dateFormatter
-        }
+        }()
 
         private var spriteScene: SKScene {
             let scene = SnowScene()
@@ -85,16 +115,25 @@ extension Home {
             return scene
         }
 
+        init(resolver: Resolver) {
+            self.resolver = resolver
+            _state = StateObject(wrappedValue: StateModel(resolver: resolver))
+        }
+
         var glucoseView: some View {
             CurrentGlucoseView(
                 recentGlucose: $state.recentGlucose,
-                timerDate: $state.timerDate,
                 delta: $state.glucoseDelta,
-                units: $state.units,
+                units: $state.data.units,
                 alarm: $state.alarm,
-                lowGlucose: $state.lowGlucose,
-                highGlucose: $state.highGlucose,
-                alwaysUseColors: $state.alwaysUseColors
+                lowGlucose: $state.data.lowGlucose,
+                highGlucose: $state.data.highGlucose,
+                alwaysUseColors: $state.alwaysUseColors,
+                displayDelta: $state.displayDelta,
+                scrolling: $displayGlucose, displaySAGE: $state.displaySAGE,
+                displayExpiration: $state.displayExpiration,
+                sensordays: $state.sensorDays,
+                timerDate: $state.data.timerDate
             )
             .onTapGesture {
                 if state.alarm == nil {
@@ -120,7 +159,7 @@ extension Home {
                 battery: $state.battery,
                 name: $state.pumpName,
                 expiresAtDate: $state.pumpExpiresAtDate,
-                timerDate: $state.timerDate, timeZone: $state.timeZone,
+                timerDate: $state.data.timerDate, timeZone: $state.timeZone,
                 state: state
             )
             .onTapGesture {
@@ -128,14 +167,15 @@ extension Home {
                     state.setupPump = true
                 }
             }
+            .offset(y: 2)
         }
 
         var loopView: some View {
             LoopView(
-                suggestion: $state.suggestion,
+                suggestion: $state.data.suggestion,
                 enactedSuggestion: $state.enactedSuggestion,
                 closedLoop: $state.closedLoop,
-                timerDate: $state.timerDate,
+                timerDate: $state.data.timerDate,
                 isLooping: $state.isLooping,
                 lastLoopDate: $state.lastLoopDate,
                 manualTempBasal: $state.manualTempBasal
@@ -149,9 +189,9 @@ extension Home {
             }
         }
 
-        var tempBasalString: String? {
+        var tempBasalString: String {
             guard let tempRate = state.tempRate else {
-                return nil
+                return "?" + NSLocalizedString(" U/hr", comment: "Unit per hour with space")
             }
             let rateString = numberFormatter.string(from: tempRate as NSNumber) ?? "0"
             var manualBasalString = ""
@@ -179,13 +219,10 @@ extension Home {
                         if state.pumpSuspended {
                             Text("Pump suspended")
                                 .font(.extraSmall).bold().foregroundColor(.loopGray)
-                        } else if let tempBasalString = tempBasalString {
+                        } else {
                             Text(tempBasalString)
                                 .font(.statusFont).bold()
                                 .foregroundColor(.insulin)
-                        }
-                        if state.closedLoop, state.settingsManager.preferences.maxIOB == 0 {
-                            Text("Check Max IOB Setting").font(.extraSmall).foregroundColor(.orange)
                         }
                     }
                 }
@@ -201,36 +238,32 @@ extension Home {
                 }
 
                 ZStack {
-                    if let eventualBG = state.eventualBG {
-                        HStack {
-                            Text("⇢").font(.statusFont).foregroundStyle(.secondary)
+                    HStack {
+                        Text("⇢").font(.statusFont).foregroundStyle(.secondary)
 
-                            // Image(systemName: "arrow.forward")
+                        if let eventualBG = state.eventualBG {
                             Text(
                                 fetchedTargetFormatter.string(
-                                    from: (state.units == .mmolL ? eventualBG.asMmolL : Decimal(eventualBG)) as NSNumber
-                                )!
+                                    from: (state.data.units == .mmolL ? eventualBG.asMmolL : Decimal(eventualBG)) as NSNumber
+                                ) ?? ""
                             ).font(.statusFont).foregroundColor(colorScheme == .dark ? .white : .black)
-                            Text(state.units.rawValue).font(.system(size: 12)).foregroundStyle(.secondary)
+                        } else {
+                            Text("?").font(.statusFont).foregroundStyle(.secondary)
                         }
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                        .padding(.trailing, 8)
+                        Text(state.data.units.rawValue).font(.system(size: 12)).foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, 8)
                 }
-            }.dynamicTypeSize(...DynamicTypeSize.xxLarge)
+            }
+            .dynamicTypeSize(...DynamicTypeSize.xxLarge)
         }
 
         var infoPanel: some View {
-            /* addBackground()
-             .frame(minHeight: 40, maxHeight: 40)
-             .overlay { */
-            info
-                .frame(minHeight: 35, maxHeight: 35)
-            /* }
-                 .clipShape(RoundedRectangle(cornerRadius: 15))
-                 .addShadows()
-                 .padding(.horizontal, 10)
-             // .background(colorScheme == .light ? .gray.opacity(0.1) : .white.opacity(0.05)) */
+            info.frame(height: 26)
+                .background {
+                    InfoPanelBackground(colorScheme: colorScheme)
+                }
         }
 
         var mainChart: some View {
@@ -240,35 +273,7 @@ extension Home {
                         .ignoresSafeArea()
                         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                 }
-                MainChartView(
-                    glucose: $state.glucose,
-                    isManual: $state.isManual,
-                    suggestion: $state.suggestion,
-                    tempBasals: $state.tempBasals,
-                    boluses: $state.boluses,
-                    suspensions: $state.suspensions,
-                    announcement: $state.announcement,
-                    hours: .constant(state.filteredHours),
-                    maxBasal: $state.maxBasal,
-                    autotunedBasalProfile: $state.autotunedBasalProfile,
-                    basalProfile: $state.basalProfile,
-                    tempTargets: $state.tempTargets,
-                    carbs: $state.carbs,
-                    timerDate: $state.timerDate,
-                    units: $state.units,
-                    smooth: $state.smooth,
-                    highGlucose: $state.highGlucose,
-                    lowGlucose: $state.lowGlucose,
-                    screenHours: $state.hours,
-                    displayXgridLines: $state.displayXgridLines,
-                    displayYgridLines: $state.displayYgridLines,
-                    thresholdLines: $state.thresholdLines,
-                    triggerUpdate: $triggerUpdate,
-                    overrideHistory: $state.overrideHistory,
-                    minimumSMB: $state.minimumSMB,
-                    maxBolus: $state.maxBolus,
-                    maxBolusValue: $state.maxBolusValue, useInsulinBars: $state.useInsulinBars
-                )
+                MainChartView(data: state.data, triggerUpdate: $triggerUpdate)
             }
             .padding(.bottom, 5)
             .modal(for: .dataTable, from: self)
@@ -280,116 +285,129 @@ extension Home {
                     .frame(height: 50 + geo.safeAreaInsets.bottom)
                 let isOverride = fetchedPercent.first?.enabled ?? false
                 let isTarget = (state.tempTarget != nil)
-                HStack {
-                    Button { state.showModal(for: .dataTable) }
-                    label: {
-                        ZStack(alignment: Alignment(horizontal: .leading, vertical: .bottom)) {
-                            Image(systemName: "book")
-                                .symbolRenderingMode(.hierarchical)
-                                .resizable()
-                                .frame(
-                                    width: IAPSconfig.buttonSize * 0.9,
-                                    height: IAPSconfig.buttonSize
-                                )
-                                .foregroundColor(.gray)
+                VStack {
+                    Divider()
+                    HStack {
+                        if state.carbButton {
+                            Button { state.showModal(for: .addCarbs(editMode: false, override: false, mode: .meal)) }
+                            label: {
+                                ZStack(alignment: Alignment(horizontal: .trailing, vertical: .bottom)) {
+                                    Image(systemName: "fork.knife")
+                                        .renderingMode(.template)
+                                        .font(.custom("Buttons", size: 24))
+                                        .foregroundStyle(colorScheme == .dark ? .loopYellow : .orange)
+                                        .padding(8)
+                                    if let carbsReq = state.carbsRequired {
+                                        Text(numberFormatter.string(from: carbsReq as NSNumber)!)
+                                            .font(.caption)
+                                            .foregroundStyle(.white)
+                                            .padding(4)
+                                            .background(Capsule().fill(Color.red))
+                                    }
+                                }
+                            }
+                            .contextMenu {
+                                Button {
+                                    state.showModal(for: .addCarbs(editMode: false, override: false, mode: .presets)) }
+                                label: { Label("Meal Presets", systemImage: "menucard")
+                                }
+                                Button {
+                                    state.showModal(for: .addCarbs(editMode: false, override: false, mode: .barcode)) }
+                                label: { Label("Barcode", systemImage: "barcode.viewfinder")
+                                }
+                                if state.ai {
+                                    Button {
+                                        state.showModal(for: .addCarbs(editMode: false, override: false, mode: .image)) }
+                                    label: { Label("AI Image Analysis", systemImage: "photo.badge.magnifyingglass")
+                                    }
+                                }
+                                Button {
+                                    state.showModal(for: .addCarbs(editMode: false, override: false, mode: .meal)) }
+                                label: { Label("Add Meal", systemImage: "birthday.cake")
+                                }
+                            }
+                            Spacer()
                         }
-                    }.buttonStyle(.borderless)
-                    Spacer()
-                    Button { state.showModal(for: .addCarbs(editMode: false, override: false)) }
-                    label: {
-                        ZStack(alignment: Alignment(horizontal: .trailing, vertical: .bottom)) {
-                            Image(systemName: "fork.knife")
+                        Button {
+                            (state.bolusProgress != nil) ? showBolusActiveAlert = true :
+                                state.showModal(for: .bolus(
+                                    waitForSuggestion: state.useCalc ? true : false,
+                                    fetch: false
+                                ))
+                        }
+                        label: {
+                            Image(systemName: "syringe")
                                 .renderingMode(.template)
                                 .font(.custom("Buttons", size: 24))
-                                .foregroundColor(colorScheme == .dark ? .loopYellow : .orange)
-                                .padding(8)
-                                .foregroundColor(.loopYellow)
-                            if let carbsReq = state.carbsRequired {
-                                Text(numberFormatter.string(from: carbsReq as NSNumber)!)
-                                    .font(.caption)
-                                    .foregroundColor(.white)
-                                    .padding(4)
-                                    .background(Capsule().fill(Color.red))
-                            }
                         }
-                    }.buttonStyle(.borderless)
-                    Spacer()
-                    ZStack(alignment: Alignment(horizontal: .trailing, vertical: .bottom)) {
-                        Image(systemName: isOverride ? "person.fill" : "person")
-                            .symbolRenderingMode(.palette)
-                            .font(.custom("Buttons", size: 28))
-                            .foregroundStyle(.purple)
-                            .padding(8)
-                            .background(isOverride ? .purple.opacity(0.15) : .clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                    }
-                    .onTapGesture {
-                        if isOverride {
-                            showCancelAlert.toggle()
-                        } else {
-                            state.showModal(for: .overrideProfilesConfig)
-                        }
-                    }
-                    .onLongPressGesture {
-                        state.showModal(for: .overrideProfilesConfig)
-                    }
-                    if state.useTargetButton {
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.insulin)
                         Spacer()
-                        Image(systemName: "target")
-                            .renderingMode(.template)
-                            .font(.custom("Buttons", size: 24))
-                            .padding(8)
-                            .foregroundColor(.loopGreen)
-                            .background(isTarget ? .green.opacity(0.15) : .clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                        if state.allowManualTemp {
+                            Button { state.showModal(for: .manualTempBasal) }
+                            label: {
+                                Image("bolus1")
+                                    .renderingMode(.template)
+                                    .resizable()
+                                    .frame(width: IAPSconfig.buttonSize, height: IAPSconfig.buttonSize, alignment: .bottom)
+                            }
+                            .foregroundStyle(.insulin)
+                            Spacer()
+                        }
+                        if state.profileButton {
+                            ZStack(alignment: Alignment(horizontal: .trailing, vertical: .bottom)) {
+                                Image(systemName: isOverride ? "person.fill" : "person")
+                                    .symbolRenderingMode(.palette)
+                                    .font(.custom("Buttons", size: 28))
+                                    .foregroundStyle(.purple)
+                                    .padding(8)
+                                    .background(isOverride ? .purple.opacity(0.15) : .clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
                             .onTapGesture {
-                                if isTarget {
-                                    showCancelTTAlert.toggle()
+                                if isOverride {
+                                    showCancelAlert.toggle()
                                 } else {
-                                    state.showModal(for: .addTempTarget)
+                                    state.showModal(for: .overrideProfilesConfig)
                                 }
                             }
                             .onLongPressGesture {
-                                state.showModal(for: .addTempTarget)
+                                state.showModal(for: .overrideProfilesConfig)
                             }
-                    }
-                    Spacer()
-                    Button {
-                        state.showModal(for: .bolus(
-                            waitForSuggestion: state.useCalc ? true : false,
-                            fetch: false
-                        ))
-                    }
-                    label: {
-                        Image(systemName: "syringe")
-                            .renderingMode(.template)
-                            .font(.custom("Buttons", size: 24))
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundColor(.insulin)
-                    Spacer()
-                    if state.allowManualTemp {
-                        Button { state.showModal(for: .manualTempBasal) }
-                        label: {
-                            Image("bolus1")
-                                .renderingMode(.template)
-                                .resizable()
-                                .frame(width: IAPSconfig.buttonSize, height: IAPSconfig.buttonSize, alignment: .bottom)
+                            Spacer()
                         }
-                        .foregroundColor(.insulin)
-                        Spacer()
+                        if state.useTargetButton {
+                            Image(systemName: "target")
+                                .renderingMode(.template)
+                                .font(.custom("Buttons", size: 24))
+                                .padding(8)
+                                .foregroundStyle(.loopGreen)
+                                .background(isTarget ? .green.opacity(0.15) : .clear)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                .onTapGesture {
+                                    if isTarget {
+                                        showCancelTTAlert.toggle()
+                                    } else {
+                                        state.showModal(for: .addTempTarget)
+                                    }
+                                }
+                                .onLongPressGesture {
+                                    state.showModal(for: .addTempTarget)
+                                }
+                            Spacer()
+                        }
+                        Button { state.showModal(for: .settings) }
+                        label: {
+                            Image(systemName: "gear")
+                                .renderingMode(.template)
+                                .font(.custom("Buttons", size: 24))
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.gray)
                     }
-                    Button { state.showModal(for: .settings) }
-                    label: {
-                        Image(systemName: "gear")
-                            .renderingMode(.template)
-                            .font(.custom("Buttons", size: 24))
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundColor(.gray)
+                    .padding(.horizontal, state.allowManualTemp ? 10 : 24)
+                    .padding(.bottom, geo.safeAreaInsets.bottom)
                 }
-                .padding(.horizontal, state.allowManualTemp ? 5 : 24)
-                .padding(.bottom, geo.safeAreaInsets.bottom)
             }
             .dynamicTypeSize(...DynamicTypeSize.xxLarge)
             .confirmationDialog("Cancel Profile Override", isPresented: $showCancelAlert) {
@@ -403,93 +421,130 @@ extension Home {
                     state.cancelTempTarget()
                 }
             }
+            .confirmationDialog("Bolus already in Progress", isPresented: $showBolusActiveAlert) {
+                Button("Bolus already in Progress!", role: .destructive) {
+                    showBolusActiveAlert = false
+                }
+            }
         }
 
         var chart: some View {
-            addColouredBackground()
+            let ratio = 1.96
+            let ratio2 = 2.0
+
+            return addColouredBackground().shadow(radius: 3, y: 3)
                 .overlay {
-                    VStack(spacing: 0) {
-                        infoPanel
-                        mainChart
-                        if state.timeSettings {
-                            timeSetting
-                        }
-                    }
+                    mainChart
                 }
-                .frame(
-                    minHeight: UIScreen.main.bounds
-                        .height / (state.timeSettings ? 1.50 : fontSize < .extraExtraLarge ? 1.46 : 1.49)
-                )
+                .frame(minHeight: UIScreen.main.bounds.height / (fontSize < .extraExtraLarge ? ratio : ratio2))
         }
 
         var carbsAndInsulinView: some View {
             HStack {
-                if let settings = state.settingsManager {
-                    let opacity: CGFloat = colorScheme == .dark ? 0.2 : 0.6
-                    let materialOpacity: CGFloat = colorScheme == .dark ? 0.25 : 0.10
-                    HStack {
-                        let substance = Double(state.suggestion?.cob ?? 0)
-                        let max = max(Double(settings.preferences.maxCOB), 1)
-                        let fraction: Double = 1 - (substance / max)
-                        let fill = CGFloat(min(Swift.max(fraction, 0.05), substance > 0 ? 0.92 : 0.97))
-                        TestTube(
-                            opacity: opacity,
-                            amount: fill,
-                            colourOfSubstance: .loopYellow,
-                            materialOpacity: materialOpacity
-                        )
-                        .frame(width: 12, height: 38)
-                        .offset(x: 0, y: -5)
-                        HStack(spacing: 0) {
-                            Text(
-                                numberFormatter.string(from: (state.suggestion?.cob ?? 0) as NSNumber) ?? "0"
-                            ).font(.statusFont).bold()
-                            Text(NSLocalizedString(" g", comment: "gram of carbs")).font(.statusFont).foregroundStyle(.secondary)
-                        }.offset(x: 0, y: 5)
-                    }
-                    HStack {
-                        let substance = Double(state.suggestion?.iob ?? 0)
-                        let max = max(Double(settings.preferences.maxIOB), 1)
-                        let fraction: Double = 1 - (substance / max)
-                        let fill = CGFloat(min(Swift.max(fraction, 0.05), substance > 0 ? 0.92 : 0.98))
-                        TestTube(
-                            opacity: opacity,
-                            amount: fill,
-                            colourOfSubstance: substance < 0 ? .red : .insulin,
-                            materialOpacity: materialOpacity
-                        )
-                        .frame(width: 12, height: 38)
-                        .offset(x: 0, y: -5)
-                        HStack(spacing: 0) {
-                            Text(
-                                numberFormatter.string(from: (state.suggestion?.iob ?? 0) as NSNumber) ?? "0"
-                            ).font(.statusFont).bold()
-                            Text(NSLocalizedString(" U", comment: "Insulin unit")).font(.statusFont).foregroundStyle(.secondary)
-                        }.offset(x: 0, y: 5)
-                    }
+                // A temporary ugly(?) workaround for displaying last real IOB and COB computation
+                let opacity: CGFloat = colorScheme == .dark ? 0.2 : 0.65
+                let materialOpacity: CGFloat = colorScheme == .dark ? 0.25 : 0.10
+                // Carbs on Board
+                HStack {
+                    let substance = Double(state.data.suggestion?.cob ?? 0)
+                    let max = max(Double(state.maxCOB), 1)
+                    let fraction: Double = 1 - (substance / max)
+                    let fill = CGFloat(min(Swift.max(fraction, 0.05), substance > 0 ? 0.92 : 1))
+                    TestTube(
+                        opacity: opacity,
+                        amount: fill,
+                        colourOfSubstance: .loopYellow,
+                        materialOpacity: materialOpacity
+                    )
+                    .frame(width: 12, height: 38)
+                    .offset(y: -5)
+                    HStack(spacing: 0) {
+                        if let loop = state.data.suggestion, let cob = loop.cob {
+                            Text(numberFormatter.string(from: cob as NSNumber) ?? "0")
+                                .font(.statusFont).bold()
+                            // Display last loop, unless very old
+                        } else {
+                            Text("?").font(.statusFont).bold()
+                        }
+                        Text(NSLocalizedString(" g", comment: "gram of carbs")).font(.statusFont).foregroundStyle(.secondary)
+                    }.offset(y: 5)
                 }
-            }
+                // Instead of Spacer
+                Text(" ")
+
+                // Insulin on Board
+                HStack {
+                    let substance = Double(state.data.iob ?? 0)
+                    let max = max(Double(state.maxIOB), 1)
+                    let fraction: Double = 1 - abs(substance) / max
+                    let fill = CGFloat(min(Swift.max(fraction, 0.05), 1))
+                    TestTube(
+                        opacity: opacity,
+                        amount: fill,
+                        colourOfSubstance: substance < 0 ? .red : .insulin,
+                        materialOpacity: materialOpacity
+                    )
+                    .frame(width: 12, height: 38)
+                    .offset(y: -5)
+                    HStack(spacing: 0) {
+                        if let iob = state.data.iob {
+                            Text(
+                                targetFormatter.string(from: iob as NSNumber) ?? "0"
+                            ).font(.statusFont).bold()
+                        } else {
+                            Text("?").font(.statusFont).bold()
+                        }
+                        Text(NSLocalizedString(" U", comment: "Insulin unit")).font(.statusFont).foregroundStyle(.secondary)
+                    }.offset(y: 5)
+                }
+            }.offset(x: 5, y: 5)
         }
 
         var preview: some View {
             addBackground()
                 .frame(minHeight: 200)
                 .overlay {
-                    PreviewChart(readings: $state.readings, lowLimit: $state.lowGlucose, highLimit: $state.highGlucose)
+                    PreviewChart(
+                        readings: $state.readings,
+                        lowLimit: $state.data.lowGlucose,
+                        highLimit: $state.data.highGlucose
+                    )
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 15))
                 .addShadows()
                 .padding(.horizontal, 10)
+                .blur(radius: animateTIRView ? 2 : 0)
                 .onTapGesture {
+                    timeIsNowTIR()
                     state.showModal(for: .statistics)
                 }
+                .overlay {
+                    if animateTIRView {
+                        animation.asAny()
+                    }
+                }
+        }
+
+        var infoPanelView: some View {
+            addBackground()
+                .frame(height: 30)
+                .overlay {
+                    HStack {
+                        info
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 15))
+                .addShadows()
+                .padding(.horizontal, 10)
         }
 
         var activeIOBView: some View {
             addBackground()
-                .frame(minHeight: 340)
+                .frame(minHeight: 190)
                 .overlay {
-                    ActiveIOBView(data: $state.iobData, neg: $state.neg, tddChange: $state.tddChange)
+                    ActiveIOBView(
+                        data: $state.iobData,
+                    )
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 15))
                 .addShadows()
@@ -498,7 +553,7 @@ extension Home {
 
         var activeCOBView: some View {
             addBackground()
-                .frame(minHeight: 250)
+                .frame(minHeight: 190)
                 .overlay {
                     ActiveCOBView(data: $state.iobData)
                 }
@@ -507,17 +562,55 @@ extension Home {
                 .padding(.horizontal, 10)
         }
 
+        var insulinView: some View {
+            addBackground()
+                .frame(minHeight: 280)
+                .overlay {
+                    InsulinSummaryView(
+                        neg: $state.neg,
+                        tddChange: $state.tddChange,
+                        tddAverage: $state.tddAverage,
+                        tddYesterday: $state.tddYesterday,
+                        tdd2DaysAgo: $state.tdd2DaysAgo,
+                        tdd3DaysAgo: $state.tdd3DaysAgo,
+                        tddActualAverage: $state.tddActualAverage
+                    )
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 15))
+                .addShadows()
+                .padding(.horizontal, 10)
+        }
+
+        var mealsView: some View {
+            addBackground()
+                .frame(minHeight: frameHeight)
+                .overlay {
+                    mealsSummaryView
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 15))
+                .addShadows()
+                .padding(.horizontal, 10)
+                .dynamicTypeSize(...DynamicTypeSize.medium)
+        }
+
         var loopPreview: some View {
             addBackground()
-                .frame(minHeight: 190)
+                .frame(minHeight: 160)
                 .overlay {
                     LoopsView(loopStatistics: $state.loopStatistics)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 15))
                 .addShadows()
                 .padding(.horizontal, 10)
+                .blur(radius: animateLoopView ? 2.5 : 0)
                 .onTapGesture {
+                    timeIsNowLoop()
                     state.showModal(for: .statistics)
+                }
+                .overlay {
+                    if animateLoopView {
+                        animation.asAny()
+                    }
                 }
         }
 
@@ -538,11 +631,13 @@ extension Home {
                                         Text(name).font(.statusFont).foregroundStyle(.secondary)
                                     }
                                 }
-                            }
+                            } else { Text("📉") } // Hypo Treatment is not actually a preset
                         } else if override.percentage != 100 {
-                            Text(override.percentage.formatted() + " %").font(.statusFont).foregroundStyle(.secondary)
+                            Text((tirFormatter.string(from: override.percentage as NSNumber) ?? "") + " %").font(.statusFont)
+                                .foregroundStyle(.secondary)
                         } else if override.smbIsOff, !override.smbIsAlwaysOff {
-                            Text("No ").font(.statusFont).foregroundStyle(.secondary) // "No" as in no SMBs
+                            Text(NSLocalizedString("No ", comment: "No as in no SMBs")).font(.statusFont)
+                                .foregroundStyle(.secondary)
                             Image(systemName: "syringe")
                                 .font(.previewNormal).foregroundStyle(.secondary)
                         } else if override.smbIsOff {
@@ -559,113 +654,631 @@ extension Home {
 
         func bolusProgressView(progress: Decimal, amount: Decimal) -> some View {
             ZStack {
-                HStack {
-                    VStack {
-                        HStack {
-                            Text("Bolusing")
-                                .foregroundColor(.primary).font(.bolusProgressFont)
-                            let bolused = targetFormatter.string(from: (amount * progress) as NSNumber) ?? ""
-
-                            Text(
-                                bolused + " " + NSLocalizedString("of", comment: "") + " " + amount
-                                    .formatted() + NSLocalizedString(" U", comment: "")
-                            ).font(.bolusProgressBarFont)
-                        }
-                        ProgressView(value: Double(progress))
-                            .progressViewStyle(BolusProgressViewStyle())
+                VStack {
+                    HStack {
+                        let bolused = targetFormatter.string(from: (amount * progress) as NSNumber) ?? ""
+                        Text("Bolusing")
+                        Text(
+                            bolused + " " + NSLocalizedString("of", comment: "") + " " + amount
+                                .formatted() + NSLocalizedString(" U", comment: "")
+                        )
+                    }.frame(width: 250, height: 25).font(.bolusProgressBarFont)
+                    HStack(alignment: .bottom, spacing: 5) {
+                        ProgressView(value: Double(progress)).progressViewStyle(BolusProgressViewStyle())
+                            .overlay {
+                                Image(systemName: "pause.fill")
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(.white, .blue)
+                                    .font(.bolusProgressStopFont)
+                            }
                     }
-                    Image(systemName: "xmark.square.fill")
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, .blue)
-                        .font(.bolusProgressStopFont)
-                        .onTapGesture { state.cancelBolus() }
-                        .offset(x: 10, y: 0)
+                    .onTapGesture { state.cancelBolus() }
                 }
+                .dynamicTypeSize(...DynamicTypeSize.large)
+                .padding(.bottom, 8)
             }
         }
 
         @ViewBuilder private func headerView(_ geo: GeometryProxy) -> some View {
+            let height: CGFloat = displayGlucose ? 140 : 210
             addHeaderBackground()
                 .frame(
-                    maxHeight: fontSize < .extraExtraLarge ? 125 + geo.safeAreaInsets.top : 135 + geo.safeAreaInsets.top
+                    height: fontSize < .extraExtraLarge ? height + geo.safeAreaInsets.top : height + 10 + geo
+                        .safeAreaInsets.top
                 )
+                .clipShape(Rectangle())
                 .overlay {
                     VStack {
                         ZStack {
-                            glucoseView.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).padding(.top, 10)
-                            HStack {
-                                carbsAndInsulinView
-                                    .frame(maxHeight: .infinity, alignment: .bottom)
-                                Spacer()
-                                loopView.frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, 3)
-                                    .offset(x: -2, y: 0) // To do: Remove all offsets, if possible.
-                                Spacer()
-                                pumpView
-                                    .frame(maxHeight: .infinity, alignment: .bottom)
-                                    .padding(.bottom, 2)
+                            if !displayGlucose {
+                                glucoseView.frame(maxHeight: .infinity, alignment: .center).offset(y: -5)
+                                loopView
+                                    .frame(
+                                        maxWidth: .infinity,
+                                        maxHeight: .infinity,
+                                        alignment: .topLeading
+                                    )
+                                    .padding(20)
+                                    .offset(x: 5, y: -10)
                             }
-                            .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-                            .padding(.horizontal, 10)
+                            if displayGlucose {
+                                glucoseView.frame(maxHeight: .infinity, alignment: .center).offset(y: -10)
+                            } else {
+                                HStack {
+                                    carbsAndInsulinView
+                                        .frame(maxHeight: .infinity, alignment: .bottom)
+                                    // Spacer()
+                                    pumpView
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                                }
+                                .dynamicTypeSize(...DynamicTypeSize.xLarge)
+                                .padding(.horizontal, 10)
+                                .padding(.bottom, 5)
+                            }
                         }
-                    }.padding(.top, geo.safeAreaInsets.top).padding(.bottom, colorScheme == .dark ? 0 : 10)
+
+                        if displayGlucose {
+                            glucosePreview
+                        } else {
+                            infoPanelView
+                        }
+
+                        Divider()
+                    }
+                    .padding(.top, geo.safeAreaInsets.top)
                 }
-                .clipShape(Rectangle())
+        }
+
+        var glucosePreview: some View {
+            let data = state.data.glucose
+            let minimum = data.compactMap(\.glucose).min() ?? 0
+            let minimumRange = Double(minimum) * 0.8
+            let maximum = Double(data.compactMap(\.glucose).max() ?? 0) * 1.1
+
+            let high = state.data.highGlucose
+            let low = state.data.lowGlucose
+            let veryHigh = 198
+
+            return Chart(data) {
+                PointMark(
+                    x: .value("Time", $0.dateString),
+                    y: .value("Glucose", Double($0.glucose ?? 0) * (state.data.units == .mmolL ? 0.0555 : 1.0))
+                )
+                .foregroundStyle(
+                    (($0.glucose ?? 0) > veryHigh || Decimal($0.glucose ?? 0) < low) ? Color(.red) : Decimal($0.glucose ?? 0) >
+                        high ? Color(.yellow) : Color(.darkGreen)
+                )
+                .symbolSize(5)
+            }
+            .chartXAxis(.hidden)
+            .chartYAxis {
+                AxisMarks(values: .automatic(desiredCount: 3))
+            }
+            .chartYScale(
+                domain: minimumRange * (state.data.units == .mmolL ? 0.0555 : 1.0) ... maximum *
+                    (state.data.units == .mmolL ? 0.0555 : 1.0)
+            )
+            .chartXScale(
+                domain: Date.now.addingTimeInterval(-1.days.timeInterval) ... Date.now
+            )
+            .frame(height: 50)
+            .padding(.leading, 30)
+            .padding(.trailing, 32)
+            .padding(.top, 15)
+            .dynamicTypeSize(DynamicTypeSize.medium ... DynamicTypeSize.large)
         }
 
         var timeSetting: some View {
-            let string = "\(state.hours) " + NSLocalizedString("hours", comment: "") + "   "
-            return Menu(string) {
-                Button("3 " + NSLocalizedString("hours", comment: ""), action: { state.hours = 3 })
-                Button("6 " + NSLocalizedString("hours", comment: ""), action: { state.hours = 6 })
-                Button("12 " + NSLocalizedString("hours", comment: ""), action: { state.hours = 12 })
-                Button("24 " + NSLocalizedString("hours", comment: ""), action: { state.hours = 24 })
-                Button("UI/UX Settings", action: { state.showModal(for: .statisticsConfig) })
+            let hourLabel = "\(state.hours) " + NSLocalizedString("hours", comment: "") + "   "
+
+            return Menu(hourLabel) {
+                ForEach([3, 6, 9, 12, 24], id: \.self) { value in
+                    let label = "\(value) " + NSLocalizedString("hours", comment: "")
+                    Button(label, action: { state.hours = value })
+                }
+
+                Button("UI/UX Settings", action: {
+                    state.showModal(for: .uiConfig)
+                })
             }
             .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.primary)
             .font(.timeSettingFont)
             .padding(.vertical, 15)
-            .background(TimeEllipse(characters: string.count))
+            .background(TimeEllipse(characters: hourLabel.count))
         }
+
+        private var isfView: some View {
+            ZStack {
+                HStack(spacing: 4) {
+                    Image(systemName: "divide")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.teal)
+
+                    Text(String(describing: state.data.suggestion?.sensitivityRatio ?? 1))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1) // maximum 1 row
+                        .fixedSize(horizontal: true, vertical: false) // Prevent wrapping
+                }
+                .font(.timeSettingFont)
+                .background(TimeEllipse(characters: 10))
+                .onTapGesture {
+                    if (state.autoisf && !disabled()) || enabled() {
+                        displayAutoHistory.toggle()
+                    } else {
+                        displayDynamicHistory.toggle()
+                    }
+                }
+            }
+            .offset(x: 130)
+        }
+
+        private var mealIntervalPicker: some View {
+            HStack(spacing: 10) {
+                ForEach([DateFilter.today, DateFilter.day, DateFilter.week, DateFilter.month]) { interval in
+                    Button {
+                        state.selectedMealInterval = interval
+                        state.setupMeals()
+                    } label: {
+                        Text(NSLocalizedString(interval.title, comment: "Interval"))
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(
+                                state.selectedMealInterval == interval
+                                    ? Color.secondary
+                                    : Color.gray.opacity(0.15)
+                            )
+                            .foregroundStyle(
+                                state.selectedMealInterval == interval
+                                    ? .white
+                                    : .primary
+                            )
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+
+        private var mealsSummaryView: some View {
+            VStack {
+                Text("Meals")
+                    .font(.previewHeadline)
+                    .padding(.top, 20)
+                    .padding(.bottom, 15)
+
+                mealIntervalPicker
+                    .padding(.bottom, 10)
+
+                servingsView
+                    .padding(.horizontal, 23)
+
+                caloriesView
+                    .padding(.horizontal, 23)
+
+                carbNutrientsView
+                    .padding(.horizontal, 23)
+                    .padding(.bottom, (savedMicronutrients.isEmpty && !otherMacros) ? 10 : 0)
+
+                if !(savedMicronutrients.isEmpty && !otherMacros) {
+                    micronutrientToggle
+
+                    if displayAllNutrients {
+                        micronutrientsAndMoreView
+                            .padding(.horizontal, 23)
+                            .background(Color(.systemGray5))
+                    }
+                }
+            }
+            .dynamicTypeSize(...DynamicTypeSize.xLarge)
+        }
+
+        private var micronutrientToggle: some View {
+            Button {
+                displayAllNutrients.toggle()
+            } label: {
+                Label(
+                    micronutrientTitle(),
+                    systemImage: "pills.fill"
+                )
+                .font(.caption.weight(.semibold))
+                .labelStyle(.titleAndIcon)
+                .padding(.vertical, 10)
+                .padding(.leading, 20)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.borderless)
+            .foregroundStyle(.blue)
+            .padding(.bottom, !displayAllNutrients ? 20 : 10)
+        }
+
+        private var caloriesView: some View {
+            HStack {
+                Text("Kilo Calories")
+                Spacer()
+                Text(
+                    tirFormatter.string(
+                        from: displayedCalories as NSNumber
+                    ) ?? ""
+                )
+            }
+            .foregroundStyle(.secondary)
+        }
+
+        private var servingsView: some View {
+            HStack {
+                Text("Servings")
+                Spacer()
+                Text(
+                    tirFormatter.string(
+                        from: displayedServings as NSNumber
+                    ) ?? ""
+                )
+            }
+            .foregroundStyle(.secondary)
+        }
+
+        private var carbNutrientsView: some View {
+            HStack {
+                Text("Carbs")
+                Spacer()
+                Text(
+                    tirFormatter.string(
+                        from: displayedCarbs as NSNumber
+                    ) ?? ""
+                )
+            }
+            .foregroundStyle(.secondary)
+        }
+
+        private var otherMacroNutrientsView: some View {
+            VStack {
+                if state.mealData.fat > 0 {
+                    micronutrientRow(
+                        "Fat",
+                        value: displayedFat,
+                        unit: "g",
+                        formatter: tirFormatter
+                    )
+                }
+
+                if state.mealData.protein > 0 {
+                    micronutrientRow(
+                        "Protein",
+                        value: displayedProtein,
+                        unit: "g",
+                        progress: MicronutrientProgress.progress(
+                            nutrient: .protein,
+                            amount: NSDecimalNumber(decimal: displayedProtein).doubleValue,
+                            age: state.individual.age,
+                            sex: state.individual.sex
+                        ),
+                        formatter: tirFormatter
+                    )
+                }
+
+                if state.mealData.fiber > 0 {
+                    micronutrientRow(
+                        "Fiber",
+                        value: displayedFiber,
+                        unit: "g",
+                        progress: MicronutrientProgress.progress(
+                            nutrient: .fiber,
+                            amount: NSDecimalNumber(decimal: displayedFiber).doubleValue,
+                            age: state.individual.age,
+                            sex: state.individual.sex
+                        ),
+                        formatter: tirFormatter
+                    )
+                }
+            }
+            .foregroundStyle(.secondary)
+            .font(.callout)
+        }
+
+        private var micronutrientsAndMoreView: some View {
+            VStack(spacing: 4) {
+                otherMacroNutrientsView
+                    .padding(.bottom, otherMacros ? 10 : 0)
+
+                ForEach(savedMicronutrients, id: \.nutrient) { item in
+                    let value = state.mealData.averaged(item.amount)
+
+                    micronutrientRow(
+                        item.nutrient.displayName,
+                        value: value,
+                        unit: item.nutrient.unit,
+                        progress: MicronutrientProgress.progress(
+                            nutrient: item.nutrient,
+                            amount: NSDecimalNumber(decimal: value).doubleValue,
+                            age: state.individual.age,
+                            sex: state.individual.sex
+                        ),
+                        formatter: targetFormatter
+                    )
+                }
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 30)
+        }
+
+        private func micronutrientRow(
+            _ title: String,
+            value: Decimal,
+            unit: String,
+            progress: NutrientProgress? = nil,
+            formatter: NumberFormatter
+        ) -> some View {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(NSLocalizedString(title, comment: ""))
+
+                    Spacer()
+
+                    if let progress {
+                        Text("\(Int(progress.percent.rounded())) %")
+                            .foregroundStyle(progress.color)
+                    }
+
+                    Text(formatter.string(from: NSDecimalNumber(decimal: value)) ?? "")
+
+                    Text(NSLocalizedString(unit, comment: ""))
+                }
+
+                if let progress {
+                    NutrientProgressBar(progress: progress)
+                }
+            }
+        }
+
+        private var otherMacros: Bool {
+            state.mealData.fat > 0 || state.mealData.protein > 0 || state.mealData.fiber > 0
+        }
+
+        private func countOtherMacros() -> Int {
+            var total = 0
+            total += state.mealData.fat > 0 ? 1 : 0
+            total += state.mealData.protein > 0 ? 1 : 0
+            total += state.mealData.fiber > 0 ? 1 : 0
+            return total
+        }
+
+        private var nutrientsCount: Int {
+            state.mealData.micronutrients.count + countOtherMacros()
+        }
+
+        private func micronutrientTitle() -> String {
+            let count = state.mealData.additionalNutrients + countOtherMacros()
+
+            guard count > 0 else {
+                return String.empty
+            }
+
+            guard count > 1 else {
+                return "\(count) " + NSLocalizedString("more nutrient", comment: "")
+            }
+
+            return "\(count) " + NSLocalizedString("more nutrients", comment: "")
+        }
+
+        /// Currently constant. The Average Day Title
+        private var intervalTitle: String { "Day" }
+
+        private var displayedServings: Decimal {
+            state.mealData.averaged(state.mealData.servings)
+        }
+
+        private var displayedCarbs: Decimal {
+            state.mealData.averaged(state.mealData.carbs)
+        }
+
+        private var displayedFat: Decimal {
+            state.mealData.averaged(state.mealData.fat)
+        }
+
+        private var displayedProtein: Decimal {
+            state.mealData.averaged(state.mealData.protein)
+        }
+
+        private var displayedFiber: Decimal {
+            state.mealData.averaged(state.mealData.fiber)
+        }
+
+        private var displayedCalories: Decimal {
+            state.mealData.averaged(state.mealData.kcal)
+        }
+
+        private var savedMicronutrients: [(nutrient: MicroNutrient, amount: Decimal)] {
+            state.mealData.micronutrients
+                .filter { $0.value > 0 }
+                .sorted {
+                    MicronutrientProgress.progress(
+                        nutrient: $0.key,
+                        amount: NSDecimalNumber(decimal: $0.value).doubleValue,
+                        age: state.individual.age,
+                        sex: state.individual.sex
+                    ).percent
+                        >
+                        MicronutrientProgress.progress(
+                            nutrient: $1.key,
+                            amount: NSDecimalNumber(decimal: $1.value).doubleValue,
+                            age: state.individual.age,
+                            sex: state.individual.sex
+                        ).percent
+                }
+                .map { ($0.key, $0.value) }
+        }
+
+        /// Meal Summary Frame Height
+        private var frameHeight: CGFloat {
+            CGFloat(
+                200 +
+                    ((state.mealData.micronutrients.isEmpty && !otherMacros) ? 0 : 53) +
+                    (displayAllNutrients && state.mealData.micronutrients.isEmpty ? 43 : displayAllNutrients ? 64 : 0) +
+                    (displayAllNutrients ? 1 : 0) * nutrientsCount * 31
+            )
+        }
+
+        private func enabled() -> Bool {
+            guard let or = fetchedPercent.first, or.enabled else { return false }
+            guard let aisf = fetchedAISF.first(where: { $0.id == or.id }) else { return false }
+            return aisf.autoisf
+        }
+
+        private func disabled() -> Bool {
+            guard let or = fetchedPercent.first, or.enabled else { return false }
+            guard let aisf = fetchedAISF.first(where: { $0.id == or.id }) else { return false }
+            return !aisf.autoisf
+        }
+
+        private var animateLoopView: Bool {
+            -1 * animateLoop.timeIntervalSinceNow < 1.5
+        }
+
+        private var animateTIRView: Bool {
+            -1 * animateTIR.timeIntervalSinceNow < 1.5
+        }
+
+        private func timeIsNowLoop() {
+            animateLoop = Date.now
+        }
+
+        private func timeIsNowTIR() {
+            animateTIR = Date.now
+        }
+
+        private var animation: any View {
+            ActivityIndicator(isAnimating: .constant(true), style: .large)
+        }
+
+        @Environment(\.scenePhase) private var scenePhase
 
         var body: some View {
             GeometryReader { geo in
-                VStack {
-                    headerView(geo)
-                    ScrollView {
-                        chart
-                        preview.padding(.top, 15)
-                        loopPreview.padding(.top, 15)
-                        if state.iobData.count > 5 {
-                            activeCOBView.padding(.top, 15)
-                            activeIOBView.padding(.top, 15)
+                if onboarded.first?.firstRun ?? true, let openAPSSettings = state.openAPSSettings {
+                    /// If old iAPS user pre v5.7.1 OpenAPS settings will be reset, but can be restored in View below
+                    importResetSettingsView(settings: openAPSSettings)
+                } else {
+                    VStack(spacing: 0) {
+                        // Header View
+                        headerView(geo)
+                        ScrollView {
+                            VStack {
+                                // Main Chart
+                                chart
+                                // Adjust hours visible (X-Axis) and ratio display
+                                timeSetting
+                                    .overlay { isfView }
+                                // TIR Chart
+                                if !state.data.glucose.isEmpty {
+                                    preview.padding(.top, 15)
+                                }
+                                // Loops Chart
+                                loopPreview.padding(.vertical, 15)
+
+                                // COB Chart
+                                if state.carbData > 0 {
+                                    activeCOBView.padding(.bottom, 15)
+                                }
+
+                                // IOB Chart
+                                if !state.iobData.isEmpty {
+                                    activeIOBView.padding(.bottom, 15)
+                                }
+
+                                // Summary Views
+                                insulinView.padding(.bottom, 15)
+                                mealsView.padding(.bottom, 15)
+                            }
+                            .background {
+                                // Track vertical scroll
+                                GeometryReader { proxy in
+                                    let scrollPosition = proxy.frame(in: .named("HomeScrollView")).minY
+                                    let yThreshold: CGFloat = -550
+                                    Color.clear
+                                        .onChange(of: scrollPosition) {
+                                            if scrollPosition < yThreshold, state.iobs > 0 || state.carbData > 0,
+                                               !state.skipGlucoseChart
+                                            {
+                                                withAnimation(.easeOut(duration: 0.3)) { displayGlucose = true }
+                                            } else {
+                                                withAnimation(.easeOut(duration: 0.4)) { displayGlucose = false }
+                                            }
+                                        }
+                                }
+                            }
+                        }.coordinateSpace(name: "HomeScrollView")
+                        // Buttons
+                        buttonPanel(geo)
+                    }
+                    .background(
+                        colorScheme == .light ? IAPSconfig.homeViewBackgroundLight : IAPSconfig.homeViewBackgrundDark
+                    )
+                    .ignoresSafeArea(edges: .vertical)
+                    .overlay {
+                        if let progress = state.bolusProgress, let amount = state.bolusAmount {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 15)
+                                    .fill(
+                                        colorScheme == .light ? IAPSconfig
+                                            .homeViewBackgroundLight : IAPSconfig
+                                            .homeViewBackgrundDark
+                                    )
+                                    .frame(maxWidth: 320, maxHeight: 90)
+                                bolusProgressView(progress: progress, amount: amount)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .offset(y: -100)
                         }
                     }
-                    .scrollIndicators(.hidden)
-                    buttonPanel(geo)
-                }
-                .background(
-                    colorScheme == .light ? .gray.opacity(IAPSconfig.backgroundOpacity * 2) : .white
-                        .opacity(IAPSconfig.backgroundOpacity * 2)
-                )
-                .ignoresSafeArea(edges: .vertical)
-                .overlay {
-                    if let progress = state.bolusProgress, let amount = state.bolusAmount {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 15)
-                                .fill(.gray.opacity(0.8))
-                                .frame(width: 320, height: 60)
-                            bolusProgressView(progress: progress, amount: amount)
+                    .onChange(of: scenePhase) {
+                        switch scenePhase {
+                        case .active:
+                            state.startTimer()
+                            checkBuildExpiration()
+                        case .background,
+                             .inactive:
+                            state.stopTimer()
+                        default:
+                            break
                         }
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .offset(x: 0, y: -100)
                     }
                 }
             }
-            .onAppear(perform: configureView)
+            .onAppear {
+                if onboarded.first?.firstRun ?? true {
+                    state.fetchPreferences()
+                }
+                checkBuildExpiration()
+            }
+            .alert(
+                BuildExpirationManager.shared.alertTitle,
+                isPresented: $showExpirationAlert
+            ) {
+                Button("OK", role: .cancel) {}
+                Button("More Info") {
+                    if let url = URL(string: "https://github.com/Artificial-Pancreas/iAPS/releases") {
+                        UIApplication.shared.open(url)
+                    }
+                }
+            } message: {
+                Text(BuildExpirationManager.shared.alertMessage)
+            }
             .navigationTitle("Home")
             .navigationBarHidden(true)
             .ignoresSafeArea(.keyboard)
+            .sheet(isPresented: $displayAutoHistory) {
+                AutoISFHistoryView(units: state.data.units)
+                    .environment(\.colorScheme, colorScheme)
+            }
+            .sheet(isPresented: $displayDynamicHistory) {
+                DynamicHistoryView(units: state.data.units)
+                    .environment(\.colorScheme, colorScheme)
+            }
             .popup(isPresented: state.isStatusPopupPresented, alignment: .bottom, direction: .bottom) {
                 popup
                     .padding()
@@ -685,33 +1298,46 @@ extension Home {
                             }
                     )
             }
-            .onAppear(perform: configureView)
+        }
+
+        private func checkBuildExpiration() {
+            let manager = BuildExpirationManager.shared
+            guard manager.shouldShowAlert else { return }
+            manager.markAlertShown()
+            showExpirationAlert = true
         }
 
         private var popup: some View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(state.statusTitle).font(.suggestionHeadline).foregroundColor(.white)
                     .padding(.bottom, 4)
-                if let suggestion = state.suggestion {
+                if let suggestion = state.data.suggestion {
                     TagCloudView(tags: suggestion.reasonParts).animation(.none, value: false)
 
                     Text(suggestion.reasonConclusion.capitalizingFirstLetter()).font(.suggestionSmallParts)
                         .foregroundColor(.white)
                 } else {
-                    Text("No sugestion found").font(.suggestionHeadline).foregroundColor(.white)
+                    Text("No suggestion found").font(.suggestionHeadline).foregroundColor(.white)
                 }
                 if let errorMessage = state.errorMessage, let date = state.errorDate {
-                    Text(NSLocalizedString("Error at", comment: "") + " " + dateFormatter.string(from: date))
+                    Text(NSLocalizedString("Status at", comment: "") + " " + dateFormatter.string(from: date))
                         .foregroundColor(.white)
                         .font(.suggestionError)
                         .padding(.bottom, 4)
                         .padding(.top, 8)
-                    Text(errorMessage).font(.buttonFont).foregroundColor(.loopRed)
-                } else if let suggestion = state.suggestion, (suggestion.bg ?? 100) == 400 {
+                    Text(errorMessage).font(.suggestionError).fontWeight(.semibold).foregroundColor(.orange)
+                } else if let suggestion = state.data.suggestion, (suggestion.bg ?? 100) == 400 {
                     Text("Invalid CGM reading (HIGH).").font(.suggestionError).bold().foregroundColor(.loopRed).padding(.top, 8)
                     Text("SMBs and High Temps Disabled.").font(.suggestionParts).foregroundColor(.white).padding(.bottom, 4)
                 }
             }
+        }
+
+        private func importResetSettingsView(settings: Preferences) -> some View {
+            Restore.RootView(
+                resolver: resolver,
+                openAPS: settings
+            )
         }
     }
 }

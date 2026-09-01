@@ -4,6 +4,7 @@ import SwiftDate
 
 extension Home {
     final class Provider: BaseProvider, HomeProvider {
+        @Injected() var appCoordinator: AppCoordinator!
         @Injected() var apsManager: APSManager!
         @Injected() var glucoseStorage: GlucoseStorage!
         @Injected() var pumpHistoryStorage: PumpHistoryStorage!
@@ -11,26 +12,45 @@ extension Home {
         @Injected() var carbsStorage: CarbsStorage!
         @Injected() var announcementStorage: AnnouncementsStorage!
 
+        let overrideStorage = OverrideStorage()
+        let coreDateStorage = CoreDataStorage()
+
         var suggestion: Suggestion? {
             storage.retrieve(OpenAPS.Enact.suggested, as: Suggestion.self)
         }
 
-        let overrideStorage = OverrideStorage()
+        var dynamicVariables: DynamicVariables? {
+            storage.retrieve(OpenAPS.Monitor.dynamicVariables, as: DynamicVariables.self)
+        }
+
+        func fetchedMeals(_ interval: NSDate) -> [Meals] {
+            coreDateStorage.fetchMealData(
+                interval: interval
+            )
+        }
 
         func overrides() -> [Override] {
-            overrideStorage.fetchOverrides(interval: DateFilter().day)
+            overrideStorage.fetchOverrides(interval: DateFilter.day.startDate)
+        }
+
+        func latestOverride() -> Override? {
+            overrideStorage.fetchLatestOverride().first
         }
 
         func overrideHistory() -> [OverrideHistory] {
-            overrideStorage.fetchOverrideHistory(interval: DateFilter().day)
+            overrideStorage.fetchOverrideHistory(interval: DateFilter.day.startDate)
         }
 
         var enactedSuggestion: Suggestion? {
             storage.retrieve(OpenAPS.Enact.enacted, as: Suggestion.self)
         }
 
+        func iob() async throws -> Decimal? {
+            await apsManager.iobSync()
+        }
+
         func reasons() -> [IOBData]? {
-            let reasons = CoreDataStorage().fetchReasons(interval: DateFilter().day)
+            let reasons = coreDateStorage.fetchReasons(interval: DateFilter.day.startDate)
 
             guard reasons.count > 3 else {
                 return nil
@@ -47,35 +67,40 @@ extension Home {
         }
 
         func pumpTimeZone() -> TimeZone? {
-            apsManager.pumpManager?.status.timeZone
+            deviceManager.pumpManager?.status.timeZone
         }
 
         func heartbeatNow() {
-            apsManager.heartbeat(date: Date())
+            appCoordinator.sendHeartbeat()
         }
 
         func filteredGlucose(hours: Int) -> [BloodGlucose] {
-            glucoseStorage.recent().filter {
-                $0.dateString.addingTimeInterval(hours.hours.timeInterval) > Date()
+            let now = Date()
+            // .retrieve() will read glucose from storage and apply smoothing if needed
+            return glucoseStorage.retrieve().filter {
+                $0.dateString.addingTimeInterval(hours.hours.timeInterval) > now
             }
         }
 
         func manualGlucose(hours: Int) -> [BloodGlucose] {
-            glucoseStorage.recent().filter {
+            let now = Date()
+            return glucoseStorage.retrieve().filter {
                 $0.type == GlucoseType.manual.rawValue &&
-                    $0.dateString.addingTimeInterval(hours.hours.timeInterval) > Date()
+                    $0.dateString.addingTimeInterval(hours.hours.timeInterval) > now
             }
         }
 
         func pumpHistory(hours: Int) -> [PumpHistoryEvent] {
-            pumpHistoryStorage.recent().filter {
-                $0.timestamp.addingTimeInterval(hours.hours.timeInterval) > Date()
+            let now = Date()
+            return pumpHistoryStorage.recent().filter {
+                $0.timestamp.addingTimeInterval(hours.hours.timeInterval) > now
             }
         }
 
         func tempTargets(hours: Int) -> [TempTarget] {
-            tempTargetsStorage.recent().filter {
-                $0.createdAt.addingTimeInterval(hours.hours.timeInterval) > Date()
+            let now = Date()
+            return tempTargetsStorage.recent().filter {
+                $0.createdAt.addingTimeInterval(hours.hours.timeInterval) > now
             }
         }
 
@@ -84,21 +109,23 @@ extension Home {
         }
 
         func carbs(hours: Int) -> [CarbsEntry] {
-            carbsStorage.recent().filter {
-                $0.createdAt.addingTimeInterval(hours.hours.timeInterval) > Date()
+            let now = Date()
+            return carbsStorage.recent().filter {
+                $0.createdAt.addingTimeInterval(hours.hours.timeInterval) > now && $0.carbs > 0
             }
         }
 
         func announcement(_ hours: Int) -> [Announcement] {
-            announcementStorage.validate().filter {
-                $0.createdAt.addingTimeInterval(hours.hours.timeInterval) > Date()
+            let now = Date()
+            return announcementStorage.validate().filter {
+                $0.createdAt.addingTimeInterval(hours.hours.timeInterval) > now
             }
         }
 
         func pumpSettings() -> PumpSettings {
             storage.retrieve(OpenAPS.Settings.settings, as: PumpSettings.self)
                 ?? PumpSettings(from: OpenAPS.defaults(for: OpenAPS.Settings.settings))
-                ?? PumpSettings(insulinActionCurve: 6, maxBolus: 10, maxBasal: 2)
+                ?? PumpSettings(insulinActionCurve: 6, maxBolus: 10, maxBasal: 4)
         }
 
         func pumpBattery() -> Battery? {

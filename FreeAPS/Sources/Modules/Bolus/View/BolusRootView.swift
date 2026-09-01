@@ -6,7 +6,7 @@ extension Bolus {
         let resolver: Resolver
         let waitForSuggestion: Bool
         let fetch: Bool
-        @StateObject var state = StateModel()
+        @StateObject var state: StateModel
 
         @State private var keepForNextWiew: Bool = false
 
@@ -17,10 +17,33 @@ extension Bolus {
             return formatter
         }
 
+        private var mealFormatter: NumberFormatter {
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .decimal
+            formatter.maximumFractionDigits = 1
+            return formatter
+        }
+
+        private func format(_ number: NSDecimalNumber?) -> String {
+            guard let number = number else { return "" }
+            return mealFormatter.string(from: number) ?? ""
+        }
+
         @FetchRequest(
             entity: Meals.entity(),
             sortDescriptors: [NSSortDescriptor(key: "createdAt", ascending: false)]
         ) var meal: FetchedResults<Meals>
+
+        init(
+            resolver: Resolver,
+            waitForSuggestion: Bool,
+            fetch: Bool
+        ) {
+            self.resolver = resolver
+            self.waitForSuggestion = waitForSuggestion
+            self.fetch = fetch
+            _state = StateObject(wrappedValue: StateModel(resolver: resolver))
+        }
 
         var body: some View {
             if state.useCalc {
@@ -29,19 +52,29 @@ extension Bolus {
                         resolver: resolver,
                         waitForSuggestion: waitForSuggestion,
                         fetch: fetch,
-                        state: state,
                         meal: meal,
                         mealEntries: mealEntries
                     )
+                    .onDisappear {
+                        if state.eventualBG {
+                            state.notActive()
+                        }
+                    }
+                    .environmentObject(state)
                 } else {
                     AlternativeBolusCalcRootView(
                         resolver: resolver,
                         waitForSuggestion: waitForSuggestion,
                         fetch: fetch,
-                        state: state,
                         meal: meal,
                         mealEntries: mealEntries
                     )
+                    .onDisappear {
+                        if !state.eventualBG {
+                            state.notActive()
+                        }
+                    }
+                    .environmentObject(state)
                 }
             } else {
                 cleanBolusView
@@ -64,8 +97,7 @@ extension Bolus {
                             "0",
                             value: $state.amount,
                             formatter: formatter,
-                            cleanInput: true,
-                            useButtons: false
+                            liveEditing: true
                         )
                         Text(!(state.amount > state.maxBolus) ? "U" : "😵").foregroundColor(.secondary)
                     }
@@ -85,6 +117,7 @@ extension Bolus {
                     } else {
                         Button {
                             state.hideModal()
+                            if fetch { state.saveMeal() }
                             keepForNextWiew = true
                         }
                         label: {
@@ -95,10 +128,11 @@ extension Bolus {
                 }
             }
             .onDisappear {
-                if fetch, hasFatOrProtein, !keepForNextWiew, !state.useCalc {
-                    state.delete(deleteTwice: true, meal: meal)
-                } else if fetch, !keepForNextWiew, !state.useCalc {
-                    state.delete(deleteTwice: false, meal: meal)
+                if !state.useCalc {
+                    state.notActive()
+                }
+                if !state.useCalc {
+                    state.notActive()
                 }
             }
             .dynamicTypeSize(...DynamicTypeSize.xxLarge)
@@ -120,32 +154,33 @@ extension Bolus {
         }
 
         private var hasFatOrProtein: Bool {
-            ((meal.first?.fat ?? 0) > 0) || ((meal.first?.protein ?? 0) > 0)
+            guard let meal = meal.first else { return false }
+            return ((meal.fat ?? 0) != 0) || ((meal.protein ?? 0) != 0)
         }
 
         private var mealEntries: some View {
             VStack {
-                if let carbs = meal.first?.carbs, carbs > 0 {
+                if let carbs = meal.first?.carbs, carbs != 0 {
                     HStack {
                         Text("Carbs")
                         Spacer()
-                        Text(carbs.formatted())
+                        Text(format(carbs))
                         Text("g")
                     }.foregroundColor(.secondary)
                 }
-                if let fat = meal.first?.fat, fat > 0 {
+                if let fat = meal.first?.fat, fat != 0 {
                     HStack {
                         Text("Fat")
                         Spacer()
-                        Text(fat.formatted())
+                        Text(format(fat))
                         Text("g")
                     }.foregroundColor(.secondary)
                 }
-                if let protein = meal.first?.protein, protein > 0 {
+                if let protein = meal.first?.protein, protein != 0 {
                     HStack {
                         Text("Protein")
                         Spacer()
-                        Text(protein.formatted())
+                        Text(format(protein))
                         Text("g")
                     }.foregroundColor(.secondary)
                 }

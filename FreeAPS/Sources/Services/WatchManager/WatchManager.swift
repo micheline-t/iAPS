@@ -23,6 +23,13 @@ final class BaseWatchManager: NSObject, WatchManager, Injectable {
 
     private var lifetime = Lifetime()
 
+    private var formatter: NumberFormatter {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }
+
     init(resolver: Resolver, session: WCSession = .default) {
         self.session = session
         super.init()
@@ -70,7 +77,7 @@ final class BaseWatchManager: NSObject, WatchManager, Injectable {
 
             self.state.eventualGlucose = Decimal(self.suggestion?.eventualBG ?? 0)
 
-            let readings = self.coreDataStorage.fetchGlucose(interval: DateFilter().twoHours)
+            let readings = self.coreDataStorage.fetchGlucose(interval: DateFilter.twoHours.startDate)
             let glucoseValues = self.glucoseText(readings)
             self.state.glucose = glucoseValues.glucose
             self.state.trend = glucoseValues.trend
@@ -374,7 +381,7 @@ final class BaseWatchManager: NSObject, WatchManager, Injectable {
         let targetValue = settingsManager.settings.units == .mmolL ? rawtarget.asMmolL : rawtarget
         let target: String = rawtarget > 6 ? glucoseFormatter.string(from: targetValue as NSNumber) ?? "" : ""
 
-        let percentage = override.percentage != 100 ? override.percentage.formatted() + "%" : ""
+        let percentage = override.percentage != 100 ? (formatter.string(from: override.percentage as NSNumber) ?? "") + "%" : ""
         let string = (override.target ?? 0) as Decimal > 6 && !percentage.isEmpty ? target + " " + settingsManager.settings.units
             .rawValue + ", " + percentage : target + percentage
         return string
@@ -457,9 +464,11 @@ extension BaseWatchManager: WCSessionDelegate {
                     actualDate: nil,
                     carbs: Decimal(carbs),
                     fat: Decimal(fat),
-                    protein: Decimal(protein), note: nil,
-                    enteredBy: CarbsEntry.manual,
-                    isFPU: false, fpuID: nil
+                    protein: Decimal(protein),
+                    fiber: nil,
+                    note: nil,
+                    enteredBy: CarbsEntry.watch,
+                    isFPU: false
                 )]
             )
 
@@ -509,7 +518,6 @@ extension BaseWatchManager: WCSessionDelegate {
                     let name = storage.isPresetName()
 
                     if let duration = storage.cancelProfile() {
-                        let presetName = preset.name
                         let nsString = name != nil ? name! : activeOveride.percentage.formatted()
                         nightscout.editOverride(nsString, duration, activeOveride.date ?? Date())
                     }

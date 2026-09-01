@@ -30,6 +30,12 @@ struct Thresholds: Identifiable, Equatable {
     let threshold: String
 }
 
+struct Table: Identifiable, Equatable {
+    var id: String { UUID().uuidString }
+    var point: String { "•" }
+    let localizedString: LocalizedStringKey
+}
+
 struct BolusSummary: Identifiable, Equatable {
     var id: String { UUID().uuidString }
     let variable: String
@@ -53,9 +59,14 @@ struct GlucoseData: Identifiable {
     let id = UUID()
 }
 
-struct IOBData: Identifiable {
+struct IOBData: Identifiable, Equatable {
     var date: Date
     var iob: Decimal
     var cob: Decimal
     var id = UUID()
+}
+
+struct tddData {
+    var date: Date
+    var tdd: Decimal
 }

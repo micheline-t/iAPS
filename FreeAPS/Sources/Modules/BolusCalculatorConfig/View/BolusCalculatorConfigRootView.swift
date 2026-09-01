@@ -4,7 +4,7 @@ import Swinject
 extension BolusCalculatorConfig {
     struct RootView: BaseView {
         let resolver: Resolver
-        @StateObject var state = StateModel()
+        @StateObject var state: StateModel
 
         @State var isPresented = false
         @State var description = Text("")
@@ -12,10 +12,15 @@ extension BolusCalculatorConfig {
         @State var confirm = false
         @State var graphics: (any View)?
 
+        init(resolver: Resolver) {
+            self.resolver = resolver
+            _state = StateObject(wrappedValue: StateModel(resolver: resolver))
+        }
+
         private var conversionFormatter: NumberFormatter {
             let formatter = NumberFormatter()
             formatter.numberStyle = .decimal
-            formatter.maximumFractionDigits = 1
+            formatter.maximumFractionDigits = 2
             return formatter
         }
 
@@ -37,7 +42,7 @@ extension BolusCalculatorConfig {
                     Text(
                         state
                             .useCalc ?
-                            "Depending on your settings the Swift bolus calculator is using data from the OpenAPS glucose predictions and/or from IOB, COB, glucose trend, current gluccose and target glucose. At the end of the calculation a custom factor is applied (default 0.8).\n\nWhen Eventual glucose prediction is disabled you can also have the option in your bolus calculator to apply another (!) customizable factor at the end of the calculation which could be useful for fatty meals, e.g Pizza (default 0.7).\n\nThe bolus calculator is NOT using the OpenAPS variable \"insulinRequired\", made for SMBs." :
+                            "Depending on your settings the Swift bolus calculator is using data from the OpenAPS glucose predictions and/or from IOB, COB, glucose trend, current gluccose and target glucose. At the end of the calculation a custom factor is applied (default 0.8).\n\nYou can also have the option in your bolus calculator to apply another (!) customizable factor at the end of the calculation which could be useful for fatty meals, e.g Pizza (default 0.7).\n\nThe bolus calculator is NOT using the OpenAPS variable \"insulinRequired\", made for SMBs." :
                             ""
                     )
                 }
@@ -89,7 +94,16 @@ extension BolusCalculatorConfig {
                             "1. Use the OpenAPS eventual glucose prediction for computing the insulin recommended. This setting will enable the \"old\" calculator. On by default.\n\n2. Use the OpenAPS minPredBG prediction as a complementary safety guard rail, not allowing the glucose prediction to descend below your threshold. This setting can be used together with or without the eventual glucose. On by default"
                         )
                     }
+
+                    if !state.eventualBG {
+                        Section {
+                            Toggle(isOn: $state.disable15MinTrend) {
+                                Text("Don't Use 15 min Trend")
+                            }
+                        } footer: { Text("Don't adjust for past 15 minutes glucose trend.") }
+                    }
                 }
+
                 Section {
                     HStack {
                         Toggle(isOn: $state.allowBolusShortcut) {
@@ -125,7 +139,6 @@ extension BolusCalculatorConfig {
                 } header: { Text("iOS Shortcuts") }
             }
             .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-            .onAppear(perform: configureView)
             .navigationBarTitle("Bolus Calculator")
             .navigationBarTitleDisplayMode(.automatic)
             .blur(radius: isPresented ? 5 : 0)

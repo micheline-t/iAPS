@@ -5,7 +5,13 @@ import Swinject
 extension AddTempTarget {
     struct RootView: BaseView {
         let resolver: Resolver
-        @StateObject var state = StateModel()
+        @StateObject var state: StateModel
+
+        init(resolver: Resolver) {
+            self.resolver = resolver
+            _state = StateObject(wrappedValue: StateModel(resolver: resolver))
+        }
+
         @State private var isPromptPresented = false
         @State private var isRemoveAlertPresented = false
         @State private var removeAlert: Alert?
@@ -85,13 +91,13 @@ extension AddTempTarget {
                         HStack {
                             Text("Target")
                             Spacer()
-                            DecimalTextField("0", value: $state.low, formatter: formatter, cleanInput: true)
+                            DecimalTextField("0", value: $state.low, formatter: formatter, liveEditing: true)
                             Text(state.units.rawValue).foregroundColor(.secondary)
                         }
                         HStack {
                             Text("Duration")
                             Spacer()
-                            DecimalTextField("0", value: $state.duration, formatter: formatter, cleanInput: true)
+                            DecimalTextField("0", value: $state.duration, formatter: formatter, liveEditing: true)
                             Text("minutes").foregroundColor(.secondary)
                         }
                         DatePicker("Date", selection: $state.date)
@@ -104,7 +110,7 @@ extension AddTempTarget {
                         HStack {
                             Text("Duration")
                             Spacer()
-                            DecimalTextField("0", value: $state.duration, formatter: formatter, cleanInput: true)
+                            DecimalTextField("0", value: $state.duration, formatter: formatter, liveEditing: true)
                             Text("minutes").foregroundColor(.secondary)
                         }
                         DatePicker("Date", selection: $state.date)
@@ -137,7 +143,6 @@ extension AddTempTarget {
             }
             .dynamicTypeSize(...DynamicTypeSize.xxLarge)
             .onAppear {
-                configureView()
                 state.hbt = isEnabledArray.first?.hbt ?? 160
             }
             .navigationTitle("Enact Temp Target")

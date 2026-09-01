@@ -9,7 +9,7 @@ extension Bolus {
         let waitForSuggestion: Bool
         let fetch: Bool
 
-        @StateObject var state = StateModel()
+        @EnvironmentObject var state: StateModel
 
         let meal: FetchedResults<Meals>
         let mealEntries: any View
@@ -31,6 +31,13 @@ extension Bolus {
             return formatter
         }
 
+        private var loopFormatter: NumberFormatter {
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .decimal
+            formatter.maximumFractionDigits = 0
+            return formatter
+        }
+
         private var glucoseFormatter: NumberFormatter {
             let formatter = NumberFormatter()
             formatter.numberStyle = .decimal
@@ -44,20 +51,38 @@ extension Bolus {
             } else { return 0 }
         }
 
+        init(
+            resolver: Resolver,
+            waitForSuggestion: Bool,
+            fetch: Bool,
+//            state: StateModel,
+            meal: FetchedResults<Meals>,
+            mealEntries: any View
+        ) {
+            self.resolver = resolver
+            self.waitForSuggestion = waitForSuggestion
+            self.fetch = fetch
+//            self.state = state
+            self.meal = meal
+            self.mealEntries = mealEntries
+        }
+
         var body: some View {
             Form {
                 Section {
                     if state.waitForSuggestion {
                         Text("Please wait")
-                    } else {
+                    } else if state.predictions != nil {
                         predictionChart
+                    } else {
+                        Text("No Predictions. Failed loop suggestion.").frame(maxWidth: .infinity, alignment: .center)
                     }
                 }
 
                 if fetch {
                     Section {
                         mealEntries.asAny()
-                    } // header: { Text("Meal Summary") }
+                    }
                 }
 
                 Section {
@@ -67,21 +92,41 @@ extension Bolus {
                             Spacer()
                             ActivityIndicator(isAnimating: .constant(true), style: .medium) // fix iOS 15 bug
                         }
-                    } else {
+                    } else if state.suggestion != nil {
+                        HStack {
+                            Button(action: {
+                                presentInfo.toggle()
+                            }, label: {
+                                Image(systemName: "info.bubble")
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(colorScheme == .light ? .black : .white, .blue)
+                                    .font(.infoSymbolFont)
+                                Text("Calculations")
+                            })
+                                .foregroundStyle(.blue)
+                                .font(.footnote)
+                                .buttonStyle(PlainButtonStyle())
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if state.fattyMeals {
+                                Spacer()
+                                Toggle(isOn: $state.useFattyMealCorrectionFactor) {
+                                    Text("Fatty Meal")
+                                }
+                                .toggleStyle(CheckboxToggleStyle())
+                                .font(.footnote)
+                                .onChange(of: state.useFattyMealCorrectionFactor) {
+                                    state.insulinCalculated = state.calculateInsulin()
+                                }
+                            }
+                        }
+
                         HStack {
                             Text("Insulin recommended")
-                            Image(systemName: "info.bubble")
-                                .symbolRenderingMode(.palette)
-                                .foregroundStyle(.primary, .blue)
-                                .onTapGesture {
-                                    presentInfo.toggle()
-                                }
-
                             Spacer()
 
                             Text(
                                 formatter
-                                    .string(from: state.insulinCalculated as NSNumber)! +
+                                    .string(from: state.insulinCalculated as NSNumber) ?? "" +
                                     NSLocalizedString(" U", comment: "Insulin unit")
                             ).foregroundColor(.secondary)
                                 .onTapGesture {
@@ -96,8 +141,7 @@ extension Bolus {
                             "0",
                             value: $state.amount,
                             formatter: formatter,
-                            cleanInput: true,
-                            useButtons: true
+                            liveEditing: true
                         )
                         Text(!(state.amount > state.maxBolus) ? "U" : "😵").foregroundColor(.secondary)
                     }
@@ -129,6 +173,13 @@ extension Bolus {
                             .listRowBackground(!disabled ? Color(.systemBlue) : Color(.systemGray4))
                             .tint(.white)
                     }
+                    footer: {
+                        if (-1 * state.loopDate.timeIntervalSinceNow / 60) > state.loopReminder, let string = state.lastLoop() {
+                            Text(NSLocalizedString(string, comment: "Bolus View footer"))
+                                .padding(.top, 20).multilineTextAlignment(.center)
+                                .foregroundStyle(.orange)
+                        }
+                    }
                     .alert(isPresented: $isRemoteBolusAlertPresented) {
                         remoteBolusAlert!
                     }
@@ -138,6 +189,7 @@ extension Bolus {
                     Section {
                         Button {
                             keepForNextWiew = true
+                            state.save()
                             state.showModal(for: nil)
                         }
                         label: {
@@ -148,25 +200,25 @@ extension Bolus {
                             .listRowBackground(Color(.systemBlue))
                             .tint(.white)
                     }
+                    footer: {
+                        if abs(state.loopDate.timeIntervalSinceNow / 60) > state.loopReminder, let string = state.lastLoop() {
+                            Text(NSLocalizedString(string, comment: "Bolus View footer"))
+                                .padding(.top, 20).multilineTextAlignment(.center)
+                                .foregroundStyle(.orange)
+                        }
+                    }
                 }
             }
+            .interactiveDismissDisabled()
             .compactSectionSpacing()
             .dynamicTypeSize(...DynamicTypeSize.xxLarge)
             .onAppear {
-                configureView {
-                    state.waitForSuggestionInitial = waitForSuggestion
-                    state.waitForSuggestion = waitForSuggestion
-                }
+                state.viewActive()
+                state.waitForCarbs = fetch
+                state.waitForSuggestionInitial = waitForSuggestion
+                state.waitForSuggestion = waitForSuggestion
+                state.start()
             }
-
-            .onDisappear {
-                if fetch, hasFatOrProtein, !keepForNextWiew, state.eventualBG {
-                    state.delete(deleteTwice: true, meal: meal)
-                } else if fetch, !keepForNextWiew, state.eventualBG {
-                    state.delete(deleteTwice: false, meal: meal)
-                }
-            }
-
             .navigationTitle("Enact Bolus")
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarItems(
@@ -179,7 +231,11 @@ extension Bolus {
                         Text("Meal")
                     }
                 },
-                trailing: Button { state.hideModal() }
+                trailing: Button {
+                    state.hideModal()
+                    state.notActive()
+                    if fetch { state.apsManager.determineBasalSync() }
+                }
                 label: { Text("Cancel") }
             )
             .popup(isPresented: presentInfo, alignment: .bottom, direction: .bottom, type: .default) {
@@ -187,8 +243,9 @@ extension Bolus {
             }
         }
 
-        var disabled: Bool {
-            state.amount <= 0 || state.amount > state.maxBolus
+        private var disabled: Bool {
+            state.amount <= 0 || state.amount > state.maxBolus || state.amount <
+                state.minBolus || state.amount < state.bolusIncrement
         }
 
         var predictionChart: some View {
@@ -202,19 +259,32 @@ extension Bolus {
         }
 
         var changed: Bool {
-            ((meal.first?.carbs ?? 0) > 0) || ((meal.first?.fat ?? 0) > 0) || ((meal.first?.protein ?? 0) > 0)
+            !unchanged
+        }
+
+        private var unchanged: Bool {
+            guard let meal = meal.first else { return true }
+
+            let hasMicros = (meal.micronutrient as? Set<Micronutrient>)?.contains { ($0.amount?.decimalValue ?? 0) > 0 } ?? false
+
+            return (meal.carbs?.decimalValue ?? 0) <= 0 &&
+                (meal.fat?.decimalValue ?? 0) <= 0 &&
+                (meal.protein?.decimalValue ?? 0) <= 0 &&
+                (meal.fiber?.decimalValue ?? 0) <= 0 &&
+                !hasMicros
         }
 
         var hasFatOrProtein: Bool {
-            ((meal.first?.fat ?? 0) > 0) || ((meal.first?.protein ?? 0) > 0)
+            guard let meal = meal.first else { return false }
+            return ((meal.fat ?? 0) != 0) || ((meal.protein ?? 0) != 0)
         }
 
         func carbsView() {
             if fetch {
                 keepForNextWiew = true
-                state.backToCarbsView(complexEntry: hasFatOrProtein, meal, override: false, deleteNothing: false, editMode: true)
+                state.backToCarbsView(override: false, editMode: true)
             } else {
-                state.backToCarbsView(complexEntry: false, meal, override: true, deleteNothing: true, editMode: false)
+                state.backToCarbsView(override: true, editMode: false)
             }
         }
 
@@ -279,8 +349,11 @@ extension Bolus {
                             if state.fraction != 1, state.insulin > 0 {
                                 Divider()
                                 HStack {
-                                    Text((entries.last?.variable ?? "") + " " + (entries.last?.value ?? "") + "  ->")
-                                        .foregroundStyle(.secondary)
+                                    if let recent = entries.last {
+                                        Text("\(recent.variable) \(recent.value)  ->")
+                                            .foregroundStyle(.secondary)
+                                    }
+
                                     Text(
                                         state.insulinCalculated.formatted() + unit
                                     ).fontWeight(fontWeight).font(.title3).foregroundStyle(.blue).bold()

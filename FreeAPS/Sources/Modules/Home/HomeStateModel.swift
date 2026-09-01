@@ -1,5 +1,7 @@
 import Combine
 import CoreData
+import LibreTransmitter
+import LoopKit
 import LoopKitUI
 import SwiftDate
 import SwiftUI
@@ -7,28 +9,22 @@ import SwiftUI
 extension Home {
     final class StateModel: BaseStateModel<Provider> {
         @Injected() var broadcaster: Broadcaster!
+        @Injected() var appCoordinator: AppCoordinator!
+        @Injected() var deviceDataManager: DeviceDataManager!
         @Injected() var apsManager: APSManager!
         @Injected() var nightscoutManager: NightscoutManager!
         @Injected() var storage: TempTargetsStorage!
+        @Injected() var keychain: Keychain!
+        let coredataContext = CoreDataStack.shared.persistentContainer.viewContext
         private let timer = DispatchTimer(timeInterval: 5)
         private(set) var filteredHours = 24
-        @Published var glucose: [BloodGlucose] = []
-        @Published var isManual: [BloodGlucose] = []
-        @Published var announcement: [Announcement] = []
-        @Published var suggestion: Suggestion?
+
+        @Published var dynamicVariables: DynamicVariables?
         @Published var uploadStats = false
         @Published var enactedSuggestion: Suggestion?
         @Published var recentGlucose: BloodGlucose?
         @Published var glucoseDelta: Int?
-        @Published var tempBasals: [PumpHistoryEvent] = []
-        @Published var boluses: [PumpHistoryEvent] = []
-        @Published var suspensions: [PumpHistoryEvent] = []
-        @Published var maxBasal: Decimal = 2
-        @Published var autotunedBasalProfile: [BasalProfileEntry] = []
-        @Published var basalProfile: [BasalProfileEntry] = []
-        @Published var tempTargets: [TempTarget] = []
-        @Published var carbs: [CarbsEntry] = []
-        @Published var timerDate = Date()
+        @Published var overrideUnit: Bool = false
         @Published var closedLoop = false
         @Published var pumpSuspended = false
         @Published var isLooping = false
@@ -48,21 +44,12 @@ extension Home {
         @Published var eventualBG: Int?
         @Published var carbsRequired: Decimal?
         @Published var allowManualTemp = false
-        @Published var units: GlucoseUnits = .mmolL
         @Published var pumpDisplayState: PumpDisplayState?
         @Published var alarm: GlucoseAlarm?
         @Published var animatedBackground = false
         @Published var manualTempBasal = false
-        @Published var smooth = false
         @Published var maxValue: Decimal = 1.2
-        @Published var lowGlucose: Decimal = 4 / 0.0555
-        @Published var highGlucose: Decimal = 10 / 0.0555
-        @Published var overrideUnit: Bool = false
-        @Published var displayXgridLines: Bool = false
-        @Published var displayYgridLines: Bool = false
-        @Published var thresholdLines: Bool = false
         @Published var timeZone: TimeZone?
-        @Published var hours: Int = 6
         @Published var totalBolus: Decimal = 0
         @Published var isStatusPopupPresented: Bool = false
         @Published var readings: [Readings] = []
@@ -71,24 +58,101 @@ extension Home {
         @Published var preview: Bool = true
         @Published var useTargetButton: Bool = false
         @Published var overrideHistory: [OverrideHistory] = []
-        @Published var overrides: [Override] = []
-        @Published var alwaysUseColors: Bool = true
-        @Published var timeSettings: Bool = true
+        @Published var alwaysUseColors: Bool = false
         @Published var useCalc: Bool = true
-        @Published var minimumSMB: Decimal = 0.3
-        @Published var maxBolus: Decimal = 0
-        @Published var maxBolusValue: Decimal = 1
-        @Published var useInsulinBars: Bool = false
+        @Published var hours: Int = 6
         @Published var iobData: [IOBData] = []
+        @Published var carbData: Decimal = 0
+        @Published var iobs: Decimal = 0
         @Published var neg: Int = 0
         @Published var tddChange: Decimal = 0
+        @Published var tddAverage: Decimal = 0
+        @Published var tddYesterday: Decimal = 0
+        @Published var tdd2DaysAgo: Decimal = 0
+        @Published var tdd3DaysAgo: Decimal = 0
+        @Published var tddActualAverage: Decimal = 0
+        @Published var skipGlucoseChart: Bool = false
+        @Published var displayDelta: Bool = false
+        @Published var openAPSSettings: Preferences?
+        @Published var maxIOB: Decimal = 0
+        @Published var maxCOB: Decimal = 0
+        @Published var autoisf = false
+        @Published var displayExpiration = false
+        @Published var displaySAGE = true
+        @Published var sensorDays: Double = 10
+        @Published var carbButton: Bool = true
+        @Published var profileButton: Bool = true
+        @Published var mealData = MealData()
+        @Published var ai: Bool = false
+        @Published var individual = Individual.default
+        @Published var selectedMealInterval: DateFilter = .today
 
-        let coredataContext = CoreDataStack.shared.persistentContainer.viewContext
+        // Chart data
+        var data = ChartModel(
+            suggestion: nil,
+            glucose: [],
+            activity: [],
+            cob: [],
+            isManual: [],
+            tempBasals: [],
+            boluses: [],
+            suspensions: [],
+            announcement: [],
+            hours: 24,
+            maxBasal: 4,
+            autotunedBasalProfile: [],
+            basalProfile: [],
+            tempTargets: [],
+            carbs: [],
+            timerDate: Date(),
+            units: .mmolL,
+            smooth: false,
+            highGlucose: 200,
+            lowGlucose: 60,
+            displayXgridLines: true,
+            displayYgridLines: true,
+            thresholdLines: true,
+            latestOverride: nil,
+            overrideHistory: [],
+            minimumSMB: 0,
+            insulinDIA: 7,
+            insulinPeak: 75,
+            maxBolus: 0,
+            maxBolusValue: 1,
+            maxCarbsValue: 1,
+            maxIOB: 0,
+            maxCOB: 1,
+            useInsulinBars: true,
+            screenHours: 6,
+            fpus: true,
+            fpuAmounts: false,
+            showInsulinActivity: false,
+            showCobChart: false,
+            secondaryChartBackdrop: true,
+            inRangeAreaFill: false,
+            chartGlucosePeaks: false,
+            insulinActivityGridLines: true,
+            insulinActivityLabels: true,
+            yGridLabels: true,
+            showPredictionsLegend: true,
+            iob: nil,
+            hidePredictions: false,
+            useCarbBars: false
+        )
+
+        func startTimer() {
+            timer.resume()
+        }
+
+        func stopTimer() {
+            timer.suspend()
+        }
 
         override func subscribe() {
             setupGlucose()
             setupBasals()
             setupBoluses()
+            setupActivity()
             setupSuspensions()
             setupPumpSettings()
             setupBasalProfile()
@@ -101,37 +165,79 @@ extension Home {
             setupOverrideHistory()
             setupLoopStats()
             setupData()
+            setupCob()
+            setupMeals()
 
-            // iobData = provider.reasons()
-            suggestion = provider.suggestion
+            data.suggestion = provider.suggestion
+            dynamicVariables = provider.dynamicVariables
             overrideHistory = provider.overrideHistory()
             uploadStats = settingsManager.settings.uploadStats
             enactedSuggestion = provider.enactedSuggestion
-            units = settingsManager.settings.units
+            data.units = settingsManager.settings.units
             allowManualTemp = !settingsManager.settings.closedLoop
             closedLoop = settingsManager.settings.closedLoop
             lastLoopDate = apsManager.lastLoopDate
-            carbsRequired = suggestion?.carbsReq
+            carbsRequired = data.suggestion?.carbsReq
             alarm = provider.glucoseStorage.alarm
             manualTempBasal = apsManager.isManualTempBasal
             setStatusTitle()
             setupCurrentTempTarget()
-            smooth = settingsManager.settings.smoothGlucose
+            data.smooth = settingsManager.settings.smoothGlucose
             maxValue = settingsManager.preferences.autosensMax
-            lowGlucose = settingsManager.settings.low
-            highGlucose = settingsManager.settings.high
+            data.lowGlucose = settingsManager.settings.low
+            data.highGlucose = settingsManager.settings.high
             overrideUnit = settingsManager.settings.overrideHbA1cUnit
-            displayXgridLines = settingsManager.settings.xGridLines
-            displayYgridLines = settingsManager.settings.yGridLines
-            thresholdLines = settingsManager.settings.rulerMarks
+            data.displayXgridLines = settingsManager.settings.xGridLines
+            data.displayYgridLines = settingsManager.settings.yGridLines
+            data.thresholdLines = settingsManager.settings.rulerMarks
+            data.showInsulinActivity = settingsManager.settings.showInsulinActivity
+            data.showCobChart = settingsManager.settings.showCobChart
+            data.secondaryChartBackdrop = settingsManager.settings.secondaryChartBackdrop
+            data.inRangeAreaFill = settingsManager.settings.inRangeAreaFill
+            data.chartGlucosePeaks = settingsManager.settings.chartGlucosePeaks
+            data.insulinActivityGridLines = settingsManager.settings.insulinActivityGridLines
+            data.insulinActivityLabels = settingsManager.settings.insulinActivityLabels
+            data.yGridLabels = settingsManager.settings.yGridLabels
+            data.showPredictionsLegend = settingsManager.settings.showPredictionsLegend
             useTargetButton = settingsManager.settings.useTargetButton
-            hours = settingsManager.settings.hours
+            data.screenHours = settingsManager.settings.hours
             alwaysUseColors = settingsManager.settings.alwaysUseColors
-            timeSettings = settingsManager.settings.timeSettings
             useCalc = settingsManager.settings.useCalc
-            minimumSMB = settingsManager.settings.minimumSMB
-            maxBolus = settingsManager.pumpSettings.maxBolus
-            useInsulinBars = settingsManager.settings.useInsulinBars
+            data.minimumSMB = settingsManager.settings.minimumSMB
+            data.insulinDIA = settingsManager.pumpSettings.insulinActionCurve
+            data.insulinPeak = settingsManager.preferences.useCustomPeakTime ? settingsManager.preferences.insulinPeakTime :
+                (settingsManager.preferences.curve == .ultraRapid ? 55 : 75)
+
+            data.maxBolus = settingsManager.pumpSettings.maxBolus
+            data.maxIOB = settingsManager.preferences.maxIOB
+            data.maxCOB = settingsManager.preferences.maxCOB
+            data.useInsulinBars = settingsManager.settings.useInsulinBars
+            data.fpus = settingsManager.settings.fpus
+            data.fpuAmounts = settingsManager.settings.fpuAmounts
+            data.hidePredictions = settingsManager.settings.hidePredictions
+            data.useCarbBars = settingsManager.settings.useCarbBars
+            skipGlucoseChart = settingsManager.settings.skipGlucoseChart
+            displayDelta = settingsManager.settings.displayDelta
+            maxIOB = settingsManager.preferences.maxIOB
+            maxCOB = settingsManager.preferences.maxCOB
+            autoisf = settingsManager.settings.autoisfEffective
+            hours = settingsManager.settings.hours
+            displayExpiration = settingsManager.settings.displayExpiration
+            displaySAGE = settingsManager.settings.displaySAGE
+            ai = settingsManager.settings.ai
+            individual.sex = Sex.savedSettings(settingsManager.settings.sexSetting)
+            individual
+                .age = Int((settingsManager.settings.birthDate.timeIntervalSinceNow.hours / (365 * 24)).rounded(.towardZero))
+
+            updateSensorDays()
+
+            appCoordinator.$sensorDays
+                .receive(on: DispatchQueue.main)
+                .sink { _ in self.updateSensorDays() }
+                .store(in: &lifetime)
+
+            carbButton = settingsManager.settings.carbButton
+            profileButton = settingsManager.settings.profileButton
 
             broadcaster.register(GlucoseObserver.self, observer: self)
             broadcaster.register(SuggestionObserver.self, observer: self)
@@ -147,22 +253,24 @@ extension Home {
             broadcaster.register(PumpTimeZoneObserver.self, observer: self)
             animatedBackground = settingsManager.settings.animatedBackground
 
-            subscribeSetting(\.hours, on: $hours, initial: {
-                let value = max(min($0, 24), 2)
-                hours = value
-            }, map: {
-                $0
-            })
+            subscribeSetting(
+                \.hours,
+                on: $hours,
+                initial: {
+                    let value = max(min($0, 24), 2)
+                    hours = value
+                },
+                map: { $0 }
+            )
 
             timer.eventHandler = {
                 DispatchQueue.main.async { [weak self] in
-                    self?.timerDate = Date()
+                    self?.data.timerDate = Date()
                     self?.setupCurrentTempTarget()
                 }
             }
-            timer.resume()
 
-            apsManager.isLooping
+            appCoordinator.isLooping
                 .receive(on: DispatchQueue.main)
                 .weakAssign(to: \.isLooping, on: self)
                 .store(in: &lifetime)
@@ -186,9 +294,11 @@ extension Home {
                 .receive(on: DispatchQueue.main)
                 .map { [weak self] error in
                     self?.errorDate = error == nil ? nil : Date()
-                    if let error = error {
-                        info(.default, error.localizedDescription)
-                    }
+                    /* if let error = error,
+                        !error.localizedDescription.contains(NSLocalizedString("Pump is Busy.", comment: "Pump Error"))
+                     {
+                         info(.default, error.localizedDescription)
+                     } */
                     return error?.localizedDescription
                 }
                 .weakAssign(to: \.errorMessage, on: self)
@@ -225,16 +335,19 @@ extension Home {
             $setupPump
                 .sink { [weak self] show in
                     guard let self = self else { return }
-                    if show, let pumpManager = self.provider.apsManager.pumpManager,
-                       let bluetoothProvider = self.provider.apsManager.bluetoothManager
+                    if show, let pumpManager = self.provider.deviceManager.pumpManager
                     {
-                        let view = PumpConfig.PumpSettingsView(
-                            pumpManager: pumpManager,
-                            bluetoothManager: bluetoothProvider,
-                            completionDelegate: self,
-                            setupDelegate: self
-                        ).asAny()
-                        self.router.mainSecondaryModalView.send(view)
+                        if pumpManager.isOnboarded {
+                            let view = PumpConfig.PumpSettingsView(
+                                pumpManager: pumpManager,
+                                deviceManager: self.provider.deviceManager,
+                                completionDelegate: self,
+                            ).asAny()
+                            self.router.mainSecondaryModalView.send(view)
+                        } else {
+                            self.router.mainSecondaryModalView.send(nil)
+                            showModal(for: .pumpConfig)
+                        }
                     } else {
                         self.router.mainSecondaryModalView.send(nil)
                     }
@@ -242,8 +355,12 @@ extension Home {
                 .store(in: &lifetime)
         }
 
+        private func updateSensorDays() {
+            sensorDays = appCoordinator.sensorDays ?? settingsManager.settings.sensorDays
+        }
+
         func addCarbs() {
-            showModal(for: .addCarbs(editMode: false, override: false))
+            showModal(for: .addCarbs(editMode: false, override: false, mode: .meal))
         }
 
         func runLoop() {
@@ -264,6 +381,10 @@ extension Home {
                     if let duration = os.cancelProfile() {
                         // Update in Nightscout
                         nightscoutManager.editOverride(preset, duration, activeOveride.date ?? Date.now)
+                    }
+                } else if activeOveride.isPreset { // Because hard coded Hypo treatment isn't actually a preset
+                    if let duration = os.cancelProfile() {
+                        nightscoutManager.editOverride("📉", duration, activeOveride.date ?? Date.now)
                     }
                 } else {
                     let nsString = activeOveride.percentage.formatted() != "100" ? activeOveride.percentage
@@ -291,15 +412,37 @@ extension Home {
             }
         }
 
+        func fetchPreferences() {
+            let token = Token().getIdentifier()
+            let database = Database(token: token)
+            database.fetchPreferences("default")
+                .receive(on: DispatchQueue.main)
+                .sink { completion in
+                    switch completion {
+                    case .finished:
+                        debug(.service, "Preferences fetched from database. Profile: default")
+                    case let .failure(error):
+                        debug(.service, "Preferences fetched from database failed. Error: " + error.localizedDescription)
+                    }
+                }
+            receiveValue: { self.openAPSSettings = $0 }
+                .store(in: &lifetime)
+        }
+
         private func setupGlucose() {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.isManual = self.provider.manualGlucose(hours: self.filteredHours)
-                self.glucose = self.provider.filteredGlucose(hours: self.filteredHours)
-                self.readings = CoreDataStorage().fetchGlucose(interval: DateFilter().today)
-                self.recentGlucose = self.glucose.last
-                if self.glucose.count >= 2 {
-                    self.glucoseDelta = (self.recentGlucose?.glucose ?? 0) - (self.glucose[self.glucose.count - 2].glucose ?? 0)
+                self.data.isManual = self.provider.manualGlucose(hours: self.filteredHours)
+                self.data.glucose = self.provider.filteredGlucose(hours: self.filteredHours)
+                self.readings = CoreDataStorage().fetchGlucose(interval: DateFilter.today.startDate)
+                self.recentGlucose = self.data.glucose.last
+                if self.data.glucose.count >= 2 {
+                    self.glucoseDelta =
+                        NSDecimalNumber(
+                            decimal:
+                            (self.recentGlucose?.unfiltered ?? 0) -
+                                (self.data.glucose[self.data.glucose.count - 2].unfiltered ?? 0)
+                        ).intValue
                 } else {
                     self.glucoseDelta = nil
                 }
@@ -311,10 +454,10 @@ extension Home {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 self.manualTempBasal = self.apsManager.isManualTempBasal
-                self.tempBasals = self.provider.pumpHistory(hours: self.filteredHours).filter {
+                self.data.tempBasals = self.provider.pumpHistory(hours: self.filteredHours).filter {
                     $0.type == .tempBasal || $0.type == .tempBasalDuration
                 }
-                let lastTempBasal = Array(self.tempBasals.suffix(2))
+                let lastTempBasal = Array(self.data.tempBasals.suffix(2))
                 guard lastTempBasal.count == 2 else {
                     self.tempRate = nil
                     return
@@ -336,39 +479,53 @@ extension Home {
         private func setupBoluses() {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.boluses = self.provider.pumpHistory(hours: self.filteredHours).filter {
+                self.data.boluses = self.provider.pumpHistory(hours: self.filteredHours).filter {
                     $0.type == .bolus
                 }
-                self.maxBolusValue = self.boluses.compactMap(\.amount).max() ?? 1
+                self.data.maxBolusValue = self.data.boluses.compactMap(\.amount).max() ?? 1
             }
         }
 
         private func setupSuspensions() {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.suspensions = self.provider.pumpHistory(hours: self.filteredHours).filter {
+                self.data.suspensions = self.provider.pumpHistory(hours: self.filteredHours).filter {
                     $0.type == .pumpSuspend || $0.type == .pumpResume
                 }
 
-                let last = self.suspensions.last
-                let tbr = self.tempBasals.first { $0.timestamp > (last?.timestamp ?? .distantPast) }
+                let last = self.data.suspensions.last
+                let tbr = self.data.tempBasals.first { $0.timestamp > (last?.timestamp ?? .distantPast) }
 
                 self.pumpSuspended = tbr == nil && last?.type == .pumpSuspend
+            }
+        }
+
+        private func setupActivity() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.data.activity = CoreDataStorage().fetchInsulinData(interval: DateFilter.day.startDate)
+            }
+        }
+
+        private func setupCob() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.data.cob = self.iobData
             }
         }
 
         private func setupPumpSettings() {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.maxBasal = self.provider.pumpSettings().maxBasal
+                self.data.maxBasal = self.provider.pumpSettings().maxBasal
             }
         }
 
         private func setupBasalProfile() {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.autotunedBasalProfile = self.provider.autotunedBasalProfile()
-                self.basalProfile = self.provider.basalProfile()
+                self.data.autotunedBasalProfile = self.provider.autotunedBasalProfile()
+                self.data.basalProfile = self.provider.basalProfile()
             }
         }
 
@@ -376,28 +533,31 @@ extension Home {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 self.manualTempBasal = self.apsManager.isManualTempBasal
-                self.tempTargets = self.provider.tempTargets(hours: self.filteredHours)
+                self.data.tempTargets = self.provider.tempTargets(hours: self.filteredHours)
             }
         }
 
         private func setupCarbs() {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.carbs = self.provider.carbs(hours: self.filteredHours)
+                self.data.carbs = self.provider.carbs(hours: self.filteredHours)
+                self.data.maxCarbsValue = self.data.carbs.compactMap(\.carbs).max() ?? 1
             }
         }
 
         private func setupOverrideHistory() {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.overrideHistory = self.provider.overrideHistory()
+                self.data.latestOverride = self.provider.latestOverride()
+                self.data.overrideHistory = self.provider.overrideHistory()
             }
         }
 
         private func setupLoopStats() {
-            let loopStats = CoreDataStorage().fetchLoopStats(interval: DateFilter().today)
+            let loopStats = CoreDataStorage().fetchLoopStats(interval: DateFilter.today.startDate)
             let loops = loopStats.compactMap({ each in each.loopStatus }).count
-            let readings = CoreDataStorage().fetchGlucose(interval: DateFilter().today).compactMap({ each in each.glucose }).count
+            let readings = CoreDataStorage().fetchGlucose(interval: DateFilter.today.startDate)
+                .compactMap({ each in each.glucose }).count
             let percentage = min(readings != 0 ? (Double(loops) / Double(readings) * 100) : 0, 100)
             // First loop date
             let time = (loopStats.last?.start ?? Date.now).addingTimeInterval(-5.minutes.timeInterval)
@@ -412,23 +572,16 @@ extension Home {
             )
         }
 
-        private func setupOverrides() {
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.overrides = self.provider.overrides()
-            }
-        }
-
         private func setupAnnouncements() {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.announcement = self.provider.announcement(self.filteredHours)
+                self.data.announcement = self.provider.announcement(self.filteredHours)
             }
         }
 
         private func setStatusTitle() {
-            guard let suggestion = suggestion else {
-                statusTitle = "No suggestion"
+            guard let suggestion = data.suggestion else {
+                statusTitle = NSLocalizedString("No suggestion", comment: "Status title when there is no suggestion")
                 return
             }
 
@@ -476,37 +629,120 @@ extension Home {
             }
         }
 
+        private func setupIOB() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                Task {
+                    do {
+                        if let sync = try await self.provider.iob() {
+                            self.data.iob = sync
+                        }
+                    } catch { debug(.apsManager, "Error - Couldn't update foreground IOB value.") }
+                }
+            }
+        }
+
         private func setupData() {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 if let data = self.provider.reasons() {
                     self.iobData = data
+                    self.carbData = data.map(\.cob).reduce(0, +)
+                    self.iobs = data.map(\.iob).reduce(0, +)
                     neg = data.filter({ $0.iob < 0 }).count * 5
-                    let tdds = CoreDataStorage().fetchTDD(interval: DateFilter().twoDays)
+                    let tdds = CoreDataStorage().fetchTDD(interval: DateFilter.tenDays.startDate)
                     let yesterday = (tdds.first(where: {
                         ($0.timestamp ?? .distantFuture) <= Date().addingTimeInterval(-24.hours.timeInterval)
                     })?.tdd ?? 0) as Decimal
+                    let oneDaysAgo = CoreDataStorage().fetchTDD(interval: DateFilter.today.startDate).last
                     tddChange = ((tdds.first?.tdd ?? 0) as Decimal) - yesterday
+                    tddYesterday = (oneDaysAgo?.tdd ?? 0) as Decimal
+                    tdd2DaysAgo = (tdds.first(where: {
+                        ($0.timestamp ?? .distantFuture) <= (oneDaysAgo?.timestamp ?? .distantPast)
+                            .addingTimeInterval(-1.days.timeInterval)
+                    })?.tdd ?? 0) as Decimal
+                    tdd3DaysAgo = (tdds.first(where: {
+                        ($0.timestamp ?? .distantFuture) <= (oneDaysAgo?.timestamp ?? .distantPast)
+                            .addingTimeInterval(-2.days.timeInterval)
+                    })?.tdd ?? 0) as Decimal
 
-                    print("Yesterday: \(yesterday)")
-                    print("Today: \((tdds.first?.tdd ?? 0) as Decimal)")
+                    if let tdds_ = self.provider.dynamicVariables {
+                        tddAverage = ((tdds.first?.tdd ?? 0) as Decimal) - tdds_.average_total_data
+                        tddActualAverage = tdds_.average_total_data
+                    }
                 }
             }
         }
 
-        func openCGM() {
-            guard var url = nightscoutManager.cgmURL else { return }
+        func setupMeals() {
+            print("Meal Flow: update mealData")
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
 
-            switch url.absoluteString {
-            case "http://127.0.0.1:1979":
-                url = URL(string: "spikeapp://")!
-            case "http://127.0.0.1:17580":
-                url = URL(string: "diabox://")!
-            case CGMType.libreTransmitter.appURL?.absoluteString:
-                showModal(for: .libreConfig)
-            default: break
+                let meals = self.provider.fetchedMeals(selectedMealInterval.startDate)
+
+                self.mealData = MealData(
+                    carbs: sum(\.carbs, in: meals),
+                    fat: sum(\.fat, in: meals),
+                    protein: sum(\.protein, in: meals),
+                    fiber: sum(\.fiber, in: meals),
+                    kcal: 0,
+                    servings: meals.count,
+                    micronutrients: self.microCount(meals),
+                    intervalDays: DateFilter.interval(meals)
+                )
+
+                self.mealData.kcal =
+                    4 * (self.mealData.carbs + self.mealData.protein) +
+                    9 * self.mealData.fat
+
+                debugPrintMealData()
             }
-            UIApplication.shared.open(url, options: [:], completionHandler: nil)
+        }
+
+        private func sum(
+            _ keyPath: KeyPath<Meals, NSDecimalNumber?>,
+            in meals: [Meals]
+        ) -> Decimal {
+            meals
+                .compactMap { $0[keyPath: keyPath] as Decimal? }
+                .reduce(0, +)
+        }
+
+        private func microCount(_ meals: [Meals]) -> [MicroNutrient: Decimal] {
+            meals.reduce(into: [:]) { result, meal in
+                for (nutrient, amount) in meal.micronutrientTotals {
+                    result[nutrient, default: 0] += amount
+                }
+            }
+        }
+
+        private func debugPrintMealData() {
+            print("Meal Flow Carbs: \(mealData.carbs)")
+            print("Meal Flow Protein: \(mealData.protein)")
+            print("Meal Flow Fat: \(mealData.fat)")
+
+            for item in mealData.micronutrients {
+                print(
+                    "Meal Flow Micro \(item.key.rawValue) \(item.value)"
+                )
+            }
+        }
+
+        func openCGM() {
+            if let cgm = provider.deviceManager.cgmManager {
+                if let url = cgm.appURL {
+                    // if app url is provided (nightscout, xDrip) - open it
+                    UIApplication.shared.open(url, options: [:], completionHandler: nil)
+                } else if let cgm = cgm as? CGMManagerUI {
+                    let view = CGM.CGMSettingsView(
+                        cgmManager: cgm,
+                        deviceManager: provider.deviceManager,
+                        completionDelegate: self
+                    ).asAny()
+                    router.mainSecondaryModalView.send(view)
+                }
+            }
         }
 
         func infoPanelTTPercentage(_ hbt_: Double, _ target: Decimal) -> Decimal {
@@ -540,36 +776,67 @@ extension Home.StateModel:
     }
 
     func suggestionDidUpdate(_ suggestion: Suggestion) {
-        self.suggestion = suggestion
+        data.suggestion = suggestion
+        data.iob = data.suggestion?.iob
         carbsRequired = suggestion.carbsReq
         setStatusTitle()
         setupOverrideHistory()
         setupLoopStats()
         setupData()
+        setupActivity()
+        setupCob()
     }
 
     func settingsDidChange(_ settings: FreeAPSSettings) {
         allowManualTemp = !settings.closedLoop
         uploadStats = settingsManager.settings.uploadStats
         closedLoop = settingsManager.settings.closedLoop
-        units = settingsManager.settings.units
+        data.units = settingsManager.settings.units
         animatedBackground = settingsManager.settings.animatedBackground
         manualTempBasal = apsManager.isManualTempBasal
-        smooth = settingsManager.settings.smoothGlucose
-        lowGlucose = settingsManager.settings.low
-        highGlucose = settingsManager.settings.high
+        data.smooth = settingsManager.settings.smoothGlucose
+        data.lowGlucose = settingsManager.settings.low
+        data.highGlucose = settingsManager.settings.high
         overrideUnit = settingsManager.settings.overrideHbA1cUnit
-        displayXgridLines = settingsManager.settings.xGridLines
-        displayYgridLines = settingsManager.settings.yGridLines
-        thresholdLines = settingsManager.settings.rulerMarks
+        data.displayXgridLines = settingsManager.settings.xGridLines
+        data.displayYgridLines = settingsManager.settings.yGridLines
+        data.thresholdLines = settingsManager.settings.rulerMarks
+        data.showInsulinActivity = settingsManager.settings.showInsulinActivity
+        data.showCobChart = settingsManager.settings.showCobChart
+        data.secondaryChartBackdrop = settingsManager.settings.secondaryChartBackdrop
+        data.inRangeAreaFill = settingsManager.settings.inRangeAreaFill
+        data.chartGlucosePeaks = settingsManager.settings.chartGlucosePeaks
+        data.insulinActivityGridLines = settingsManager.settings.insulinActivityGridLines
+        data.insulinActivityLabels = settingsManager.settings.insulinActivityLabels
+        data.yGridLabels = settingsManager.settings.yGridLabels
+        data.showPredictionsLegend = settingsManager.settings.showPredictionsLegend
         useTargetButton = settingsManager.settings.useTargetButton
-        hours = settingsManager.settings.hours
+        data.screenHours = settingsManager.settings.hours
         alwaysUseColors = settingsManager.settings.alwaysUseColors
-        timeSettings = settingsManager.settings.timeSettings
         useCalc = settingsManager.settings.useCalc
-        minimumSMB = settingsManager.settings.minimumSMB
-        maxBolus = settingsManager.pumpSettings.maxBolus
-        useInsulinBars = settingsManager.settings.useInsulinBars
+        data.minimumSMB = settingsManager.settings.minimumSMB
+        data.maxBolus = settingsManager.pumpSettings.maxBolus
+        data.useInsulinBars = settingsManager.settings.useInsulinBars
+        data.fpus = settingsManager.settings.fpus
+        data.fpuAmounts = settingsManager.settings.fpuAmounts
+        data.hidePredictions = settingsManager.settings.hidePredictions
+        data.useCarbBars = settingsManager.settings.useCarbBars
+        skipGlucoseChart = settingsManager.settings.skipGlucoseChart
+        displayDelta = settingsManager.settings.displayDelta
+        maxIOB = settingsManager.preferences.maxIOB
+        maxCOB = settingsManager.preferences.maxCOB
+        autoisf = settingsManager.settings.autoisfEffective
+        hours = settingsManager.settings.hours
+        displayExpiration = settingsManager.settings.displayExpiration
+        displaySAGE = settingsManager.settings.displaySAGE
+//        cgm = settingsManager.settings.cgm
+        carbButton = settingsManager.settings.carbButton
+        profileButton = settingsManager.settings.profileButton
+        ai = settingsManager.settings.ai
+        individual.sex = Sex.savedSettings(settingsManager.settings.sexSetting)
+        individual.age = Int((settingsManager.settings.birthDate.timeIntervalSinceNow.hours / (365 * 24)).rounded(.towardZero))
+        updateSensorDays()
+
         setupGlucose()
         setupOverrideHistory()
         setupData()
@@ -580,6 +847,8 @@ extension Home.StateModel:
         setupBoluses()
         setupSuspensions()
         setupAnnouncements()
+        setupIOB()
+        setupActivity()
     }
 
     func pumpSettingsDidChange(_: PumpSettings) {
@@ -597,6 +866,7 @@ extension Home.StateModel:
     func carbsDidUpdate(_: [CarbsEntry]) {
         setupCarbs()
         setupAnnouncements()
+        setupMeals()
     }
 
     func enactedSuggestionDidUpdate(_ suggestion: Suggestion) {
@@ -623,22 +893,5 @@ extension Home.StateModel:
 extension Home.StateModel: CompletionDelegate {
     func completionNotifyingDidComplete(_: CompletionNotifying) {
         setupPump = false
-    }
-}
-
-extension Home.StateModel: PumpManagerOnboardingDelegate {
-    func pumpManagerOnboarding(didCreatePumpManager pumpManager: PumpManagerUI) {
-        provider.apsManager.pumpManager = pumpManager
-        if let insulinType = pumpManager.status.insulinType {
-            settingsManager.updateInsulinCurve(insulinType)
-        }
-    }
-
-    func pumpManagerOnboarding(didOnboardPumpManager _: PumpManagerUI) {
-        // nothing to do
-    }
-
-    func pumpManagerOnboarding(didPauseOnboarding _: PumpManagerUI) {
-        // TODO:
     }
 }

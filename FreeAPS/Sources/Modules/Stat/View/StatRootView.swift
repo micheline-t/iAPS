@@ -7,7 +7,7 @@ import Swinject
 extension Stat {
     struct RootView: BaseView {
         let resolver: Resolver
-        @StateObject var state = StateModel()
+        @StateObject var state: StateModel
 
         @FetchRequest(
             entity: TDD.entity(),
@@ -35,14 +35,19 @@ extension Stat {
         @State var pointSize: CGFloat = 3
         @State var conversionFactor = 0.0555
 
+        init(resolver: Resolver) {
+            self.resolver = resolver
+            _state = StateObject(wrappedValue: StateModel(resolver: resolver))
+        }
+
         @ViewBuilder func stats() -> some View {
             ZStack {
                 Color.gray.opacity(0.05).ignoresSafeArea(.all)
-                let filter = DateFilter()
+                let filter = DateFilter.self
                 switch selectedDuration {
                 case .Today:
                     StatsView(
-                        filter: filter.today,
+                        filter: filter.today.startDate,
                         $state.highLimit,
                         $state.lowLimit,
                         $state.units,
@@ -50,7 +55,7 @@ extension Stat {
                     )
                 case .Day:
                     StatsView(
-                        filter: filter.day,
+                        filter: filter.day.startDate,
                         $state.highLimit,
                         $state.lowLimit,
                         $state.units,
@@ -58,7 +63,7 @@ extension Stat {
                     )
                 case .Week:
                     StatsView(
-                        filter: filter.week,
+                        filter: filter.week.startDate,
                         $state.highLimit,
                         $state.lowLimit,
                         $state.units,
@@ -66,7 +71,7 @@ extension Stat {
                     )
                 case .Month:
                     StatsView(
-                        filter: filter.month,
+                        filter: filter.month.startDate,
                         $state.highLimit,
                         $state.lowLimit,
                         $state.units,
@@ -74,7 +79,7 @@ extension Stat {
                     )
                 case .Total:
                     StatsView(
-                        filter: filter.total,
+                        filter: filter.total.startDate,
                         $state.highLimit,
                         $state.lowLimit,
                         $state.units,
@@ -85,11 +90,11 @@ extension Stat {
         }
 
         @ViewBuilder func chart() -> some View {
-            let filter = DateFilter()
+            let filter = DateFilter.self
             switch selectedDuration {
             case .Today:
                 ChartsView(
-                    filter: filter.today,
+                    filter: filter.today.startDate,
                     $state.highLimit,
                     $state.lowLimit,
                     $state.units,
@@ -98,7 +103,7 @@ extension Stat {
                 )
             case .Day:
                 ChartsView(
-                    filter: filter.day,
+                    filter: filter.day.startDate,
                     $state.highLimit,
                     $state.lowLimit,
                     $state.units,
@@ -107,7 +112,7 @@ extension Stat {
                 )
             case .Week:
                 ChartsView(
-                    filter: filter.week,
+                    filter: filter.week.startDate,
                     $state.highLimit,
                     $state.lowLimit,
                     $state.units,
@@ -116,7 +121,7 @@ extension Stat {
                 )
             case .Month:
                 ChartsView(
-                    filter: filter.month,
+                    filter: filter.month.startDate,
                     $state.highLimit,
                     $state.lowLimit,
                     $state.units,
@@ -125,7 +130,7 @@ extension Stat {
                 )
             case .Total:
                 ChartsView(
-                    filter: filter.total,
+                    filter: filter.total.startDate,
                     $state.highLimit,
                     $state.lowLimit,
                     $state.units,
@@ -146,8 +151,8 @@ extension Stat {
                 .pickerStyle(.segmented).background(.cyan.opacity(0.2))
                 stats()
             }
-            .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-            .onAppear(perform: configureView)
+            .background(Color(.systemBackground)) // New iOS 26 bug
+            .dynamicTypeSize(...DynamicTypeSize.xLarge)
             .navigationBarTitle("Statistics")
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarItems(trailing: Button("Close", action: state.hideModal))

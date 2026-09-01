@@ -9,10 +9,34 @@ public enum Sex: String, CaseIterable, Identifiable {
     public var id: Self { self }
 }
 
+extension Sex {
+    static func savedSettings(_ sexSetting: Int) -> Sex {
+        switch sexSetting {
+        case 0:
+            return .woman
+        case 1:
+            return .man
+        case 2:
+            return .other
+        default:
+            return .secret
+        }
+    }
+
+    func saveSetting() -> Int {
+        switch self {
+        case .woman: return 0
+        case .man: return 1
+        case .other: return 2
+        case .secret: return 3
+        }
+    }
+}
+
 extension Sharing {
     struct RootView: BaseView {
         let resolver: Resolver
-        @StateObject var state = StateModel()
+        @StateObject var state: StateModel
 
         @State private var display: Bool = false
         @State private var copied: Bool = false
@@ -29,41 +53,54 @@ extension Sharing {
                 calendar.date(from: endComponents)!
         }()
 
+        init(resolver: Resolver) {
+            self.resolver = resolver
+            _state = StateObject(wrappedValue: StateModel(resolver: resolver))
+        }
+
         var body: some View {
             Form {
                 Section {
-                    Toggle("Share all of your Statistics", isOn: $state.uploadStats)
+                    Toggle("Share and Backup all of your Settings and Statistics", isOn: $state.uploadStats)
                     if state.uploadStats {
                         Picker("Sex", selection: $state.sex) {
                             ForEach(Sex.allCases) { sex in
                                 Text(NSLocalizedString(sex.rawValue, comment: "")).tag(Optional(sex.rawValue))
                             }
-                        }.onChange(of: state.sex) { _ in
-                            state.saveSetting()
+                        }.onChange(of: state.sex) {
+                            state.sexSetting = state.sex.saveSetting()
                         }
                         HStack {
                             DatePicker("Birth Date", selection: $state.birthDate, in: dateRange, displayedComponents: [.date])
                                 .datePickerStyle(.compact)
                         }
                     }
-                } header: { Text("Statistics") }
-
-                if !state.uploadStats {
-                    Section {
-                        Toggle("Just iAPS version number", isOn: $state.uploadVersion)
-                    } header: { Text("Share Bare Minimum") }
+                } header: { Text("Upload Settings and Statistics") }
+                footer: {
+                    Text(
+                        "\nIf you enable \"Share and Backup\" daily backups of your settings and statistics will be made to online database."
+                    )
                 }
 
                 Section {}
                 footer: {
                     Text(
-                        "Every bit of information you choose to share is uploaded anonymously. To prevent duplicate uploads, the data is identified with a unique random string saved on your phone."
+                        "Every bit of information you choose to share is uploaded anonymously. To prevent duplicate uploads, the data is identified with a unique random string saved on your phone - the recovery token."
+                    )
+                }
+
+                Section {
+                    Toggle("Upload Daily Log", isOn: $state.uploadLogs)
+                } header: { Text("Upload Daily Log") }
+                footer: {
+                    Text(
+                        "When enabled, the previous day's log file is automatically uploaded after midnight. Logs are used only to provide the multi-day analysis feature on open-iaps.app. Off by default."
                     )
                 }
 
                 Section {
                     HStack {
-                        Text(display ? state.identfier : "Tap to display")
+                        Text(display ? state.identfier : NSLocalizedString("Tap to display", comment: "Token display button"))
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
                     .onTapGesture { display.toggle() }
@@ -76,21 +113,30 @@ extension Sharing {
                         }
                     }
                 }
-                header: { Text("Your identifier") }
-                footer: { Text((copied && display) ? "Copied" : "") }
+                header: { Text("Your recovery token") }
+
+                footer: {
+                    Text((copied && display) ? "" : display ? "Long press to copy" : "")
+                        .foregroundStyle((display && !copied) ? .blue : .secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
 
                 Section {}
                 footer: {
-                    Text("https://open-iaps.app/statistics")
-                        .frame(maxWidth: .infinity, alignment: .center)
+                    let statisticsLink = URL(string: "https://open-iaps.app/user/" + state.identfier)!
+
+                    Button("View Personal Statistics") {
+                        UIApplication.shared.open(statisticsLink, options: [:], completionHandler: nil)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .font(.system(size: 15))
                 }
             }
             .dynamicTypeSize(...DynamicTypeSize.xxLarge)
             .onAppear {
-                configureView()
-                state.savedSettings()
+                state.sex = Sex.savedSettings(state.sexSetting)
             }
-            .navigationBarTitle("Share your data anonymously")
+            .navigationBarTitle("Share and Backup")
         }
     }
 }

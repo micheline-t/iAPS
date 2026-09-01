@@ -22,13 +22,29 @@ FASTLANE_KEY = ENV["FASTLANE_KEY"]
 DEVICE_NAME = ENV["DEVICE_NAME"]
 DEVICE_ID = ENV["DEVICE_ID"]
 ENV["FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT"] = "120"
-APP_IDENTIFIER = "ru.artpancreas.#{TEAMID}.FreeAPS"
+
+APP_IDENTIFIER = ENV.fetch('APP_IDENTIFIER') { "ru.artpancreas.#{TEAMID}.FreeAPS" }
+
+if ENV['BUILD_GROUP']
+  File.write('../ConfigOverride.xcconfig', "COPYRIGHT_NOTICE = #{ENV['BUILD_GROUP']}\n", mode: 'a')
+end
+
+if APP_IDENTIFIER != "ru.artpancreas.#{TEAMID}.FreeAPS"
+  File.write('../ConfigOverride.xcconfig', "BUNDLE_IDENTIFIER = #{APP_IDENTIFIER}\n", mode: 'a')
+end
+
+if File.exist?('../ConfigOverride.xcconfig')
+  contents = File.read('../ConfigOverride.xcconfig')
+  puts "=== File Contents: ../ConfigOverride.xcconfig ==="
+  puts contents
+  puts "====================="
+end
 
 platform :ios do
   desc "Build iAPS"
   lane :build_iAPS do
     setup_ci if ENV['CI']
-    
+
     update_project_team(
       path: "#{GITHUB_WORKSPACE}/FreeAPS.xcodeproj",
       teamid: "#{TEAMID}"
@@ -62,6 +78,34 @@ platform :ios do
         "#{APP_IDENTIFIER}.LiveActivity"
       ]
     )
+
+    # Fail fast if the App Group is not assigned to the bundle identifiers.
+    # match downloads/creates profiles but does not validate their entitlements, so a
+    # missing App Group otherwise only surfaces ~10 min later in `gym` as a cryptic
+    # "Provisioning profile ... doesn't support the ... App Group" xcodebuild error.
+    app_group_id = "group.com.#{TEAMID}.loopkit.LoopGroup"
+    [
+      "#{APP_IDENTIFIER}",
+      "#{APP_IDENTIFIER}.watchkitapp",
+      "#{APP_IDENTIFIER}.watchkitapp.watchkitextension"
+    ].each do |id|
+      profile_path = ENV["sigh_#{id}_appstore_profile-path"]
+      if profile_path.nil? || !File.exist?(profile_path)
+        UI.user_error!("Could not locate the provisioning profile for #{id} to verify its App Group. Re-run '3. Create Certificates' and try again.")
+      end
+      groups = FastlaneCore::ProvisioningProfile.parse(profile_path)
+        .fetch("Entitlements", {})
+        .fetch("com.apple.security.application-groups", [])
+      unless groups.include?(app_group_id)
+        UI.user_error!(
+          "The provisioning profile for #{id} does not include the App Group #{app_group_id}. " \
+          "Assign it in the Apple Developer portal (Identifiers -> #{id} -> App Groups -> Configure -> select \"Loop App Group\"), " \
+          "then run the build again: assigning the App Group invalidates the old profile, so it is normally regenerated automatically. " \
+          "If the build still fails with this error, delete AppStore_#{id}.mobileprovision from your Match-Secrets repo to force a fresh profile, then build again. " \
+          "See the \"Add App Group to Bundle Identifiers\" section in fastlane/testflight.md."
+        )
+      end
+    end
 
     previous_build_number = latest_testflight_build_number(
       app_identifier: "#{APP_IDENTIFIER}",
@@ -108,7 +152,7 @@ platform :ios do
 
     gym(
       export_method: "app-store",
-      scheme: "FreeAPS X",
+      scheme: "FreeAPSWorkspace",
       output_name: "iAPS.ipa",
       configuration: "Release",
       destination: 'generic/platform=iOS',
@@ -150,10 +194,15 @@ platform :ios do
     )
 
     def configure_bundle_id(name, identifier, capabilities)
-      bundle_id = Spaceship::ConnectAPI::BundleId.find(identifier) || Spaceship::ConnectAPI::BundleId.create(name: name, identifier: identifier)
-      capabilities.each { |capability|
-        bundle_id.create_capability(capability)
-      }
+      bundle_id = Spaceship::ConnectAPI::BundleId.find(identifier) || Spaceship::ConnectAPI::BundleId.create(
+        name:       name,
+        identifier: identifier,
+        platform:   "IOS"
+      )
+      existing = bundle_id.get_capabilities.map(&:capability_type)
+      capabilities.reject { |c| existing.include?(c) }.each do |cap|
+        bundle_id.create_capability(cap)
+      end
     end
 
     configure_bundle_id("FreeAPS", "#{APP_IDENTIFIER}", [
@@ -168,7 +217,8 @@ platform :ios do
     ])
     
     configure_bundle_id("FreeAPSWatch", "#{APP_IDENTIFIER}.watchkitapp", [
-      Spaceship::ConnectAPI::BundleIdCapability::Type::APP_GROUPS
+      Spaceship::ConnectAPI::BundleIdCapability::Type::APP_GROUPS,
+      Spaceship::ConnectAPI::BundleIdCapability::Type::HEALTHKIT
     ])
 
     configure_bundle_id("LiveActivityExtension", "#{APP_IDENTIFIER}.LiveActivity", [
@@ -190,7 +240,9 @@ platform :ios do
     
     match(
       type: "appstore",
-      force: true,
+      readonly: false,
+      force: false,
+      verbose: true,
       git_basic_authorization: Base64.strict_encode64("#{GITHUB_REPOSITORY_OWNER}:#{GH_PAT}"),
       app_identifier: [
         "#{APP_IDENTIFIER}",
@@ -242,5 +294,57 @@ platform :ios do
       skip_confirmation: true,
       git_basic_authorization: Base64.strict_encode64("#{GITHUB_REPOSITORY_OWNER}:#{GH_PAT}")
     )
+  end
+
+  desc "Check Certificates and Trigger Workflow for Expired or Missing Certificates"
+  lane :check_and_renew_certificates do
+    setup_ci if ENV['CI']
+    ENV["MATCH_READONLY"] = false.to_s
+  
+    # Authenticate using App Store Connect API Key
+    api_key = app_store_connect_api_key(
+      key_id: ENV["FASTLANE_KEY_ID"],
+      issuer_id: ENV["FASTLANE_ISSUER_ID"],
+      key_content: ENV["FASTLANE_KEY"] # Ensure valid key content
+    )
+  
+    # Initialize flag to track if renewal of certificates is needed
+    new_certificate_needed = false
+  
+    # Fetch all certificates
+    certificates = Spaceship::ConnectAPI::Certificate.all
+  
+    # Filter for Distribution Certificates
+    distribution_certs = certificates.select { |cert| cert.certificate_type == "DISTRIBUTION" }
+  
+    # Handle case where no distribution certificates are found
+    if distribution_certs.empty?
+      puts "No Distribution certificates found! Triggering action to create certificate."
+      new_certificate_needed = true
+    else
+      # Check for expiration
+      distribution_certs.each do |cert|
+        expiration_date = Time.parse(cert.expiration_date)
+  
+        puts "Current Distribution Certificate: #{cert.id}, Expiration date: #{expiration_date}"
+  
+        if expiration_date < Time.now
+          puts "Distribution Certificate #{cert.id} is expired! Triggering action to renew certificate."
+          new_certificate_needed = true
+        else
+          puts "Distribution certificate #{cert.id} is valid. No action required."
+        end
+      end
+    end
+  
+    # Write result to new_certificate_needed.txt
+    file_path = File.expand_path('new_certificate_needed.txt')
+    File.write(file_path, new_certificate_needed ? 'true' : 'false')  
+  
+    # Log the absolute path and contents of the new_certificate_needed.txt file
+    puts ""
+    puts "Absolute path of new_certificate_needed.txt: #{file_path}"
+    new_certificate_needed_content = File.read(file_path)
+    puts "Certificate creation or renewal needed: #{new_certificate_needed_content}"
   end
 end

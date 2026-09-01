@@ -1,20 +1,26 @@
 
-function generate(iob, currenttemp, glucose, profile, autosens = null, meal = null, microbolusAllowed = false, reservoir = null, clock = new Date(), dynamicVariables) {
+function generate(middleware, iob, currenttemp, glucose, profile, autosens = null, meal = null, microbolusAllowed = false, reservoir = null, clock = new Date()) {
     var clock = new Date();
     var string = "";
     
+    profile.old_basal = profile.current_basal;
+    
+    const factor = profile.dynamicVariables.overridePercentage / 100;
+    if (factor != 1 && profile.dynamicVariables.useOverride && profile.dynamicVariables.basal) {
+        profile.current_basal *= factor;
+        console.error("Override profile.current_basal to " + profile.current_basal);
+    }
+    
     try {
-        string = middleware(iob, currenttemp, glucose, profile, autosens, meal, reservoir, clock, dynamicVariables) || "";
+        string = middleware(iob, currenttemp, glucose, profile, autosens, meal, reservoir, clock) || "";
     } catch (error) {
         console.log("Invalid middleware: " + error);
         string = String(error);
     };
-        
-    if (profile.tddAdjBasal && dynamicVariables.average_total_data != 0) {
-        profile.tdd_factor = Math.round((dynamicVariables.weightedAverage / dynamicVariables.average_total_data) * 100) / 100;
-    }
-                                         
-    if (profile.useNewFormula && profile.temptargetSet && (profile.high_temptarget_raises_sensitivity || profile.exercise_mode || dynamicVariables.isEnabled) && profile.min_bg >= 118) {
+                                          
+    profile.old_cr = profile.carb_ratio;
+    
+    if (profile.dynamicVariables.useNewFormula && profile.temptargetSet && (profile.high_temptarget_raises_sensitivity || profile.exercise_mode || profile.dynamicVariables.isEnabled) && profile.min_bg >= 118) {
             profile.useNewFormula = false;
             console.log("Dynamic ISF disabled due to an active exercise ");
     }

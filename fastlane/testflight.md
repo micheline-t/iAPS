@@ -24,7 +24,7 @@ This step is common for all "Browser Builds", and should be done only once. Plea
 
 1. Sign in to the [Apple developer portal page](https://developer.apple.com/account/resources/certificates/list).
 1. Copy the team id from the upper right of the screen. Record this as your `TEAMID`.
-1. Go to the [App Store Connect](https://appstoreconnect.apple.com/access/api) interface, click the "Keys" tab, and create a new key with "Admin" access. Give it a name like "FastLane API Key".
+1. Go to the [App Store Connect](https://appstoreconnect.apple.com/access/integrations/api) interface, click the "Keys" tab, and create a new key with "Admin" access. Give it a name like "FastLane API Key".
 1. Record the key id; this will be used for `FASTLANE_KEY_ID`.
 1. Record the issuer id; this will be used for `FASTLANE_ISSUER_ID`.
 1. Download the API key itself, and open it in a text editor. The contents of this file will be used for `FASTLANE_KEY`. Copy the full text, including the "-----BEGIN PRIVATE KEY-----" and "-----END PRIVATE KEY-----" lines.
@@ -35,23 +35,8 @@ This is also a common step for all "browser builds", do this step only once
 1. Create a [new empty repository](https://github.com/new) titled `Match-Secrets`. It should be private.
 
 ## Setup Github iAPS repository
-1. Fork https://github.com/Artificial-Pancreas/iAPS into your account. If you already have a fork of iAPS in GitHub, you can't make another one. You can continue to work with your existing fork, or delete that from GitHub and then and fork https://github.com/Artificial-Pancreas/iAPS.
 
-If you have previously built Loop or another app using the "browser build" method, you can can re-use your previous personal access token (`GH_PAT`) and skip ahead to `step 2`.
-1. Create a [new personal access token](https://github.com/settings/tokens/new):
-    * Enter a name for your token. Something like "FastLane Access Token".
-    * The default Expiration time is 30 days - but you should select `No Expiration`
-    * Select the `repo` permission scope.
-    * Click "Generate token".
-    * Copy the token and record it. It will be used below as `GH_PAT`.
-1. In the forked iAPS repo, go to Settings -> Secrets -> Actions.
-1. For each of the following secrets, tap on "New repository secret", then add the name of the secret, along with the value you recorded for it:
-    * `TEAMID`
-    * `FASTLANE_KEY_ID`
-    * `FASTLANE_ISSUER_ID`
-    * `FASTLANE_KEY`
-    * `GH_PAT`
-    * `MATCH_PASSWORD` - just make up a password for this
+>    [Click here](docs/github.md)
 
 ## Validate repository secrets
 
@@ -70,15 +55,18 @@ If you have previously built Loop or another app using the "browser build" metho
 
 ## Create App Group
 
-If you have already built iAPS via Xcode using this Apple ID, you can skip on to [Create iAPS App in App Store Connect](#create-FreeAPS-X-app-in-app-store-connect).
+If you have already built iAPS (or Loop) via Xcode using this Apple ID, the "Loop App Group" likely already exists in your account. In that case skip ahead to [Add App Group to Bundle Identifiers](#add-app-group-to-bundle-identifiers) — **do not** skip past it. The App Group existing in your account is not the same as it being assigned to the iAPS bundle identifiers, and the identifiers created by "2. Add Identifiers" start out with no group assigned. Skipping that section is the most common cause of a build failing with `Provisioning profile ... doesn't support the ... LoopGroup App Group`.
 _Please note that in default builds of iAPS, the app group is actually identical to the one used with Loop, so please enter these details exactly as described below. This is to ease the setup of apps such as Xdrip4iOS. It may require some caution if transfering between iAPS and Loop._
 
 1. Go to [Register an App Group](https://developer.apple.com/account/resources/identifiers/applicationGroup/add/) on the apple developer site.
 1. For Description, use "Loop App Group".
 1. For Identifier, enter "group.com.TEAMID.loopkit.LoopGroup", substituting your team id for `TEAMID`.
 1. Click "Continue" and then "Register".
+1. If you are told the group already exists, that is fine — continue to the next section to assign it.
 
 ## Add App Group to Bundle Identifiers
+
+> This section is required even if the App Group already existed. The identifiers created by "2. Add Identifiers" have the App Groups capability enabled but no group assigned yet, so you must assign it here.
 
 1. Go to [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/identifiers/list) on the Apple developer site.
 1. For each of the following identifier names:
@@ -110,10 +98,9 @@ You do not need to fill out the next form. That is for submitting to the app sto
 
 ## Create Building Certficates
 
-1. Go back to the "Actions" tab of your iAPS repository in github.
-1. Select "3. Create Certificates".
-1. Click "Run Workflow", and tap the green button.
-1. Wait, and within a minute or two you should see a green checkmark indicating the workflow succeeded.
+This step is no longer required. The Build function now takes care of this for you. It does not hurt to run it but is not needed.
+
+Once a year, you will get an email from Apple indicating your certificate will expire in 30 days. You can ignore that email. When it does expire, the next time an automatic or manual build happens, the expired certificate information will be removed (nuked) from your Match-Secrets repository and a new one created. This should happen without you needing to take any action.
 
 ## Build iAPS!
 

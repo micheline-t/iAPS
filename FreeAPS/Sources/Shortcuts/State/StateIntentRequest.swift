@@ -7,10 +7,10 @@ enum StateIntentError: Error {
     case NoIOBCOB
 }
 
-@available(iOS 16, *) struct StateiAPSResults: AppEntity {
-    static var defaultQuery = StateBGQuery()
+struct StateiAPSResults: AppEntity {
+    static let defaultQuery = StateBGQuery()
 
-    static var typeDisplayRepresentation: TypeDisplayRepresentation = "iAPS State Result"
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "iAPS State Result"
 
     var displayRepresentation: DisplayRepresentation {
         DisplayRepresentation(title: "\(glucose)")
@@ -43,7 +43,7 @@ enum StateIntentError: Error {
     }
 }
 
-@available(iOS 16.0, *) struct StateBGQuery: EntityQuery {
+struct StateBGQuery: EntityQuery {
     func entities(for _: [StateiAPSResults.ID]) async throws -> [StateiAPSResults] {
         []
     }
@@ -53,9 +53,9 @@ enum StateIntentError: Error {
     }
 }
 
-@available(iOS 16.0, *) final class StateIntentRequest: BaseIntentsRequest {
+final class StateIntentRequest: BaseIntentsRequest {
     func getLastBG() throws -> (dateGlucose: Date, glucose: String, trend: String, delta: String) {
-        let glucose = glucoseStorage.recent()
+        let glucose = glucoseStorage.retrieve()
         guard let lastGlucose = glucose.last, let glucoseValue = lastGlucose.glucose else { throw StateIntentError.NoBG }
         let delta = glucose.count >= 2 ? glucoseValue - (glucose[glucose.count - 2].glucose ?? 0) : nil
         let units = settingsManager.settings.units

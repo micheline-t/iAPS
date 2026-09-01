@@ -4,7 +4,7 @@ import Swinject
 extension ManualTempBasal {
     struct RootView: BaseView {
         let resolver: Resolver
-        @StateObject var state = StateModel()
+        @StateObject var state: StateModel
 
         private var formatter: NumberFormatter {
             let formatter = NumberFormatter()
@@ -13,13 +13,18 @@ extension ManualTempBasal {
             return formatter
         }
 
+        init(resolver: Resolver) {
+            self.resolver = resolver
+            _state = StateObject(wrappedValue: StateModel(resolver: resolver))
+        }
+
         var body: some View {
             Form {
                 Section {
                     HStack {
                         Text("Amount")
                         Spacer()
-                        DecimalTextField("0", value: $state.rate, formatter: formatter, autofocus: true, cleanInput: true)
+                        DecimalTextField("0", value: $state.rate, formatter: formatter, autofocus: true, liveEditing: true)
                         Text("U/hr").foregroundColor(.secondary)
                     }
                     Picker(selection: $state.durationIndex, label: Text("Duration")) {
@@ -43,10 +48,26 @@ extension ManualTempBasal {
                 }
             }
             .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-            .onAppear(perform: configureView)
             .navigationTitle("Manual Temp Basal")
             .navigationBarTitleDisplayMode(.automatic)
             .navigationBarItems(trailing: Button("Close", action: state.hideModal))
+            .alert(
+                Text("Max Basal Exceeded"),
+                isPresented: $state.maxBasalExceeded
+            ) {
+                Button("OK") { state.maxBasalExceeded = false }
+            } message: {
+                Text(
+                    String(
+                        format: NSLocalizedString(
+                            "The rate %.2f U/hr exceeds your Max Basal setting of %.2f U/hr.",
+                            comment: "Alert message when manual temp basal rate exceeds Max Basal"
+                        ),
+                        Double(state.rate),
+                        Double(state.settingsManager.pumpSettings.maxBasal)
+                    )
+                )
+            }
         }
     }
 }

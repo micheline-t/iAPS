@@ -3,7 +3,7 @@ import Foundation
 import Intents
 import Swinject
 
-@available(iOS 16.0,*) struct AddCarbPresentIntent: AppIntent {
+struct AddCarbPresentIntent: AppIntent {
     // Title of the action in the Shortcuts app
     static var title: LocalizedStringResource = "Add carbs"
 
@@ -26,18 +26,25 @@ import Swinject
     ) var carbQuantity: Double?
 
     @Parameter(
-        title: "Quantity fat",
+        title: "Fat Quantity",
         description: "Quantity of fat in g",
         default: 0.0,
         inclusiveRange: (0, 200)
     ) var fatQuantity: Double
 
     @Parameter(
-        title: "Quantity Protein",
+        title: "Protein Quantity",
         description: "Quantity of Protein in g",
         default: 0.0,
         inclusiveRange: (0, 200)
     ) var proteinQuantity: Double
+
+    @Parameter(
+        title: "Fiber Quantity ",
+        description: "Quantity of Dietary Fiber in g",
+        default: 0.0,
+        inclusiveRange: (0, 200)
+    ) var fiberQuantity: Double
 
     @Parameter(
         title: "Date",
@@ -75,14 +82,20 @@ import Swinject
                 quantityCarbs = try await $carbQuantity.requestValue("How many carbs ?")
             }
 
-            let quantityCarbsName = quantityCarbs.toString()
+            let quantityCarbsName = quantityCarbs.description
             if confirmBeforeApplying {
                 try await requestConfirmation(
                     result: .result(dialog: "Are you sure to add \(quantityCarbsName) g of carbs ?")
                 )
             }
 
-            let finalQuantityCarbsDisplay = try carbRequest.addCarbs(quantityCarbs, fatQuantity, proteinQuantity, dateAdded)
+            let finalQuantityCarbsDisplay = try carbRequest.addCarbs(
+                quantityCarbs,
+                fatQuantity,
+                proteinQuantity,
+                fiberQuantity,
+                dateAdded
+            )
             return .result(
                 dialog: IntentDialog(stringLiteral: finalQuantityCarbsDisplay)
             )
